@@ -1,0 +1,164 @@
+{
+  "name": "Yaazhi — System Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }] }
+      },
+      "id": "cron-memory-consolidate",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 160]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 15 * * 0" }] }
+      },
+      "id": "cron-weekly-report",
+      "name": "Sunday 9PM IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "0 15 * * 0 = Sunday 15:00 UTC = 20:30 IST. Adjust to 15:30 for 21:00 IST."
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 3-15 * * 1-6" }] }
+      },
+      "id": "cron-study-hours",
+      "name": "Hourly 9AM-9PM IST (Study Hours)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 440],
+      "notes": "3-15 UTC = 8:30-20:30 IST (approx study hours). Mon-Sat."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.YAAZHI_API_URL }}/api/v1/memory/consolidate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 60000 }
+      },
+      "id": "http-memory-consolidate",
+      "name": "Consolidate Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 160],
+      "credentials": {
+        "httpHeaderAuth": { "id": "yaazhi-api-key", "name": "Yaazhi API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.YAAZHI_API_URL }}/api/v1/digest/weekly",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 120000 }
+      },
+      "id": "http-weekly-report",
+      "name": "Generate Weekly Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "yaazhi-api-key", "name": "Yaazhi API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $vars.YAAZHI_API_URL }}/api/v1/tasks/pending",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 15000 }
+      },
+      "id": "http-pending-tasks",
+      "name": "Check Pending Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 440],
+      "credentials": {
+        "httpHeaderAuth": { "id": "yaazhi-api-key", "name": "Yaazhi API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $vars.YAAZHI_API_URL }}/health",
+        "options": { "timeout": 10000 }
+      },
+      "id": "http-health-check",
+      "name": "Health Check on Startup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 580],
+      "notes": "Trigger manually or on n8n startup via a separate workflow start node."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "check-any-service-down",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "degraded",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "if-service-down",
+      "name": "Any Service Down?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 580]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.YAAZHI_WEBHOOK_URL }}/yaazhi-notify",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "message", "value": "🚨 Yaazhi system health degraded! Check /health endpoint." },
+            { "name": "priority", "value": "high" },
+            { "name": "task_name", "value": "System Health Alert" },
+            { "name": "timestamp", "value": "={{ new Date().toISOString() }}" }
+          ]
+        }
+      },
+      "id": "http-alert-down",
+      "name": "Alert Service Down",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 520]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [[{ "node": "Consolidate Memory", "type": "main", "index": 0 }]]
+    },
+    "Sunday 9PM IST": {
+      "main": [[{ "node": "Generate Weekly Report", "type": "main", "index": 0 }]]
+    },
+    "Hourly 9AM-9PM IST (Study Hours)": {
+      "main": [[{ "node": "Check Pending Tasks", "type": "main", "index": 0 }]]
+    },
+    "Health Check on Startup": {
+      "main": [[{ "node": "Any Service Down?", "type": "main", "index": 0 }]]
+    },
+    "Any Service Down?": {
+      "main": [
+        [{ "node": "Alert Service Down", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "id": "yaazhi-scheduler",
+  "tags": ["yaazhi", "scheduler", "maintenance"]
+}

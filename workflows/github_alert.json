@@ -1,0 +1,136 @@
+{
+  "name": "Yaazhi — GitHub Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "events": ["push", "pull_request", "issues"],
+        "owner": "={{ $vars.GITHUB_REPO_OWNER }}",
+        "repository": "={{ $vars.GITHUB_REPO_NAME }}",
+        "authentication": "accessToken"
+      },
+      "id": "n8n-github-trigger",
+      "name": "GitHub Trigger",
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "credentials": {
+        "githubApi": {
+          "id": "github-api-credentials",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-main-branch",
+              "leftValue": "={{ $json.ref }}",
+              "rightValue": "refs/heads/main",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "condition-urgent-label",
+              "leftValue": "={{ $json.label && $json.label.name }}",
+              "rightValue": "urgent",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "n8n-if-filter",
+      "name": "Filter Main or Urgent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json;\nconst eventType = $input.first().json.action || 'push';\nconst actor = event.sender?.login || event.pusher?.name || 'Unknown';\nconst repo = event.repository?.full_name || '?';\nconst ref = event.ref?.replace('refs/heads/', '') || '';\nconst commitCount = (event.commits || []).length;\nconst prTitle = event.pull_request?.title || '';\nconst issueTitle = event.issue?.title || '';\nconst link = event.compare || event.pull_request?.html_url || event.issue?.html_url || `https://github.com/${repo}`;\n\nlet title = '';\nif (eventType === 'push') title = `📦 Push by ${actor} to ${ref} (${commitCount} commit${commitCount !== 1 ? 's' : ''})`;\nelse if (prTitle) title = `🔀 PR ${eventType}: ${prTitle} by ${actor}`;\nelse if (issueTitle) title = `🐛 Issue ${eventType}: ${issueTitle} by ${actor}`;\nelse title = `⚡ GitHub ${eventType} on ${repo} by ${actor}`;\n\nconst message = `${title}\\n\\n🔗 ${link}\\n⏰ ${new Date().toLocaleString('en-IN', {timeZone:'Asia/Kolkata'})}`;\n\nreturn [{ json: { message, repo, actor, eventType, link } }];"
+      },
+      "id": "n8n-format-notification",
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.YAAZHI_API_URL }}/webhook/yaazhi-notify",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "message", "value": "={{ $json.message }}" },
+            { "name": "priority", "value": "high" },
+            { "name": "task_name", "value": "GitHub Alert" },
+            { "name": "timestamp", "value": "={{ new Date().toISOString() }}" }
+          ]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "id": "n8n-send-whatsapp",
+      "name": "Send via Yaazhi Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_notification": false
+        }
+      },
+      "id": "n8n-telegram-backup",
+      "name": "Telegram Backup",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 380],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-credentials",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GitHub Trigger": {
+      "main": [[{ "node": "Filter Main or Urgent", "type": "main", "index": 0 }]]
+    },
+    "Filter Main or Urgent": {
+      "main": [
+        [{ "node": "Format Notification", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Format Notification": {
+      "main": [
+        [
+          { "node": "Send via Yaazhi Webhook", "type": "main", "index": 0 },
+          { "node": "Telegram Backup", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "id": "yaazhi-github-alert",
+  "tags": ["yaazhi", "github", "alerts"]
+}

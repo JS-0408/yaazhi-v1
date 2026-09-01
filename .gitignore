@@ -1,0 +1,157 @@
+# ─── Python Artifacts ─────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.pyc
+
+# ─── Virtual Environments ─────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env.bak
+
+# ─── Secrets & Credentials — NEVER COMMIT ─────────────────────
+config/.env
+config/secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+*_secret*
+*_secrets*
+*secret.json
+*credentials.json
+service_account.json
+api/api.txt
+api/*.txt
+
+# ─── Distribution & Build ─────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+.eggs/
+site/
+
+# ─── AI Model Files ───────────────────────────────────────────
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+models/
+ollama_models/
+whisper_models/
+torch_cache/
+huggingface_cache/
+.cache/huggingface/
+.cache/torch/
+
+# ─── Vector Database Data Directories ─────────────────────────
+chroma_db/
+chroma_data/
+qdrant_storage/
+pgdata/
+postgres_data/
+
+# ─── Docker Volumes ───────────────────────────────────────────
+n8n_data/
+portainer_data/
+grafana_data/
+prometheus_data/
+redis_data/
+uptime_data/
+
+# ─── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+langsmith_traces/
+
+# ─── Voice Data ───────────────────────────────────────────────
+voice/recordings/
+voice/models/*.onnx
+voice/models/*.tflite
+*.wav
+*.mp3
+*.ogg
+*.flac
+
+# ─── Knowledge Base Uploads (your personal files) ─────────────
+knowledge/btech_notes/
+knowledge/ieee_papers/
+knowledge/projects/
+
+# ─── IDE & Editor Files ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ─── OS Files ─────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── Temporary & Cache Files ──────────────────────────────────
+tmp/
+.tmp/
+*.tmp
+*.bak
+*.backup
+*.orig
+.temp/
+
+# ─── Sandbox Execution ────────────────────────────────────────
+/tmp/yaazhi_sandbox/
+/tmp/yaazhi_screenshots/
+
+# ─── Testing & Coverage ───────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.coveragerc
+.tox/
+nosetests.xml
+test-results.xml
+
+# ─── Type Checking ────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ─── Linting ──────────────────────────────────────────────────
+.ruff_cache/
+
+# ─── Jupyter ──────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── Node (if any JS tooling) ─────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Backups ──────────────────────────────────────────────────
+/backups/
+*.sql.gz
+*.tar.gz

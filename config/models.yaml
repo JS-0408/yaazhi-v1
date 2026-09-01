@@ -1,0 +1,107 @@
+# ═══════════════════════════════════════════════════════════════
+# YAAZHI MODEL ROUTING CONFIGURATION
+# All model assignments for the 4-block Yaazhi system.
+# No API keys here — those live in config/.env
+# ═══════════════════════════════════════════════════════════════
+
+# ── Model Definitions ──────────────────────────────────────────
+# Each entry:
+#   model_string:         LiteLLM-compatible model identifier
+#   fallback_model_string: Used automatically if primary fails
+#   context_window_tokens: Max tokens the model accepts
+#   cost_tier:            "free" = no paid API needed, "paid" = costs money
+#   max_retries:          Attempts before switching to fallback
+
+fast_tasks:
+  model_string: "groq/llama-3.3-70b-versatile"
+  fallback_model_string: "ollama/llama3.2"
+  context_window_tokens: 128000
+  cost_tier: "free"
+  max_retries: 3
+  description: "Sub-second responses for research, Q&A, quick summaries"
+
+document_reading:
+  model_string: "gemini/gemini-1.5-pro"
+  fallback_model_string: "groq/llama-3.3-70b-versatile"
+  context_window_tokens: 2000000
+  cost_tier: "free"
+  max_retries: 3
+  description: "Reads entire textbooks and PDFs in one shot"
+
+code_generation:
+  model_string: "anthropic/claude-sonnet-4-20250514"
+  fallback_model_string: "groq/llama-3.3-70b-versatile"
+  context_window_tokens: 200000
+  cost_tier: "paid"
+  max_retries: 3
+  description: "Production-ready code writing and debugging"
+
+final_review:
+  model_string: "azure/gpt-4o"
+  fallback_model_string: "anthropic/claude-sonnet-4-20250514"
+  context_window_tokens: 128000
+  cost_tier: "paid"
+  max_retries: 3
+  description: "Final quality check for complex ECE logic"
+
+private_local:
+  model_string: "ollama/llama3.2"
+  fallback_model_string: "ollama/llama3.2"
+  context_window_tokens: 128000
+  cost_tier: "free"
+  max_retries: 5
+  description: "Sensitive tasks that must never leave your VPS"
+
+smart_local:
+  model_string: "ollama/qwen2.5:14b"
+  fallback_model_string: "ollama/llama3.2"
+  context_window_tokens: 32768
+  cost_tier: "free"
+  max_retries: 3
+  description: "High-performance local model for ECE/Code tasks (requires 10GB+ RAM)"
+
+embeddings:
+  model_string: "ollama/nomic-embed-text"
+  fallback_model_string: "ollama/nomic-embed-text"
+  context_window_tokens: 8192
+  cost_tier: "free"
+  max_retries: 5
+  description: "Text embeddings for semantic vector search"
+
+# ── Routing Rules ──────────────────────────────────────────────
+# Maps each Yaazhi task type to the model key above.
+# The orchestrator uses this to route each SubTask automatically.
+
+routing_rules:
+  research:    "fast_tasks"
+  code:        "code_generation"
+  read_doc:    "document_reading"
+  browse:      "fast_tasks"
+  notify:      "fast_tasks"
+  memory:      "fast_tasks"
+  voice:       "fast_tasks"
+  review:      "final_review"
+  private:     "private_local"
+  embed:       "embeddings"
+
+# ── Fallback Chain ─────────────────────────────────────────────
+# Order of providers to try if everything fails.
+# The system walks this list until one succeeds.
+
+fallback_chain:
+  - "groq/llama-3.3-70b-versatile"
+  - "anthropic/claude-sonnet-4-20250514"
+  - "gemini/gemini-1.5-pro"
+  - "azure/gpt-4o"
+  - "ollama/qwen2.5:14b"
+  - "ollama/llama3.2"
+
+# ── Provider Health Endpoints ──────────────────────────────────
+# Used by health_check.py to verify each provider is reachable.
+
+provider_health:
+  groq:      "https://api.groq.com/openai/v1/models"
+  anthropic: "https://api.anthropic.com/v1/models"
+  google:    "https://generativelanguage.googleapis.com/v1beta/models"
+  azure:     "health_via_completion"
+  ollama:    "http://localhost:11434/api/tags"

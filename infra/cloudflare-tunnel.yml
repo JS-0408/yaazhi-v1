@@ -1,0 +1,88 @@
+# cloudflare-tunnel.yml
+# Cloudflare Zero Trust Tunnel configuration for Yaazhi
+#
+# ✏️  YOU CONFIGURE THIS FILE:
+#   1. Run: cloudflared tunnel create yaazhi
+#   2. Copy the generated tunnel UUID into `tunnel:` below
+#   3. Replace <YOUR_TUNNEL_UUID> and your domain
+#   4. Copy the credentials JSON to /etc/cloudflared/
+#
+# Start the tunnel:
+#   cloudflared tunnel run --config /etc/cloudflared/cloudflare-tunnel.yml yaazhi
+
+# ─────────────────────────────────────────────────────────
+# Tunnel identity
+# ─────────────────────────────────────────────────────────
+tunnel: <YOUR_TUNNEL_UUID>               # e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890
+credentials-file: /etc/cloudflared/<YOUR_TUNNEL_UUID>.json
+
+# ─────────────────────────────────────────────────────────
+# Ingress rules — Cloudflare routes public URLs to local services
+# ─────────────────────────────────────────────────────────
+ingress:
+
+  # ── Main Yaazhi dashboard (Streamlit on port 8501) ───
+  - hostname: yaazhi.yourdomain.com      # ← replace with your domain
+    service: http://localhost:8501
+    originRequest:
+      connectTimeout: 10s
+      noTLSVerify: false
+
+  # ── FastAPI backend / REST API ─────────────────────────
+  - hostname: api.yaazhi.yourdomain.com  # ← replace with your domain
+    service: http://localhost:8000
+    originRequest:
+      connectTimeout: 10s
+      # Longer timeouts for voice & LLM inference endpoints
+      tcpKeepAlive: 30s
+
+  # ── n8n workflow automation UI ────────────────────────
+  - hostname: n8n.yaazhi.yourdomain.com  # ← replace with your domain
+    service: http://localhost:5678
+    originRequest:
+      connectTimeout: 10s
+
+  # ── Grafana monitoring dashboard ──────────────────────
+  - hostname: grafana.yaazhi.yourdomain.com
+    service: http://localhost:3000
+    originRequest:
+      connectTimeout: 10s
+
+  # ── Catch-all: reject everything else ────────────────
+  - service: http_status:404
+
+# ─────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────
+logfile: /var/log/cloudflared/tunnel.log
+loglevel: info
+
+# ─────────────────────────────────────────────────────────
+# Auto-update
+# ─────────────────────────────────────────────────────────
+autoupdate-freq: 24h
+
+# ─────────────────────────────────────────────────────────
+# Setup checklist (run these commands on your VPS):
+#
+#   # 1. Install cloudflared
+#   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+#        -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
+#
+#   # 2. Authenticate with your Cloudflare account
+#   cloudflared tunnel login
+#
+#   # 3. Create the tunnel
+#   cloudflared tunnel create yaazhi
+#
+#   # 4. Add DNS records (one per hostname above)
+#   cloudflared tunnel route dns yaazhi yaazhi.yourdomain.com
+#   cloudflared tunnel route dns yaazhi api.yaazhi.yourdomain.com
+#   cloudflared tunnel route dns yaazhi n8n.yaazhi.yourdomain.com
+#   cloudflared tunnel route dns yaazhi grafana.yaazhi.yourdomain.com
+#
+#   # 5. Copy this file to /etc/cloudflared/ and run as service
+#   cp cloudflare-tunnel.yml /etc/cloudflared/config.yml
+#   cloudflared service install
+#   systemctl start cloudflared
+# ─────────────────────────────────────────────────────────

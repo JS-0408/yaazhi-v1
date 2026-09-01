@@ -1,0 +1,120 @@
+{
+  "name": "Yaazhi — Daily Email Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 1 * * *"
+            }
+          ]
+        }
+      },
+      "id": "n8n-cron-daily",
+      "name": "Daily Trigger 7AM IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "Runs at 01:00 UTC which is 06:30 IST. Adjust to 01:30 for exactly 07:00 IST."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $vars.YAAZHI_API_URL + '/api/v1/digest' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "n8n-get-digest",
+      "name": "Get Daily Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "yaazhi-api-key",
+          "name": "Yaazhi API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const digest = $input.first().json;\nconst today = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata' });\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head><meta charset='utf-8'><style>\n  body { font-family: Arial, sans-serif; background: #0a0a0f; color: #e8e8f0; max-width: 600px; margin: 0 auto; padding: 20px; }\n  h1 { color: #7f6fff; border-bottom: 2px solid #7f6fff; padding-bottom: 10px; }\n  h2 { color: #4dffa0; margin-top: 24px; }\n  .metric { background: #111118; border-radius: 8px; padding: 12px; margin: 8px 0; border-left: 3px solid #7f6fff; }\n  .task { background: #1a1a24; border-radius: 6px; padding: 10px; margin: 6px 0; }\n  .status-ok { color: #4dffa0; } .status-warn { color: #ff6b6b; }\n  footer { color: #4a4a60; font-size: 12px; margin-top: 30px; }\n</style></head>\n<body>\n<h1>🤖 Yaazhi Daily Digest</h1>\n<p>${today}</p>\n\n<h2>📋 Tasks Completed</h2>\n${(digest.tasks_completed || []).map(t => `<div class='task'>✅ ${t}</div>`).join('') || '<p>No tasks completed</p>'}\n\n<h2>🧠 Memories Added</h2>\n<div class='metric'>New memories: <strong>${digest.memories_added || 0}</strong> | Total: <strong>${digest.total_memories || 0}</strong></div>\n\n<h2>🏥 System Health</h2>\n${Object.entries(digest.system_health || {}).map(([k,v]) => `<div class='metric'>${k}: <span class='${v === 'ok' ? 'status-ok' : 'status-warn'}'>${v === 'ok' ? '✅ OK' : '❌ ' + v}</span></div>`).join('')}\n\n<h2>📅 Upcoming</h2>\n${(digest.upcoming || []).map(u => `<div class='task'>🔔 ${u}</div>`).join('') || '<p>Nothing scheduled</p>'}\n\n<footer>Yaazhi AI Operating System | VIT-AP | Santhosh | Generated ${new Date().toISOString()}</footer>\n</body></html>`;\n\nreturn [{ json: { html, subject: `Yaazhi Daily Digest — ${today}`, to: $vars.OWNER_EMAIL } }];"
+      },
+      "id": "n8n-format-html",
+      "name": "Format HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "n8n-gmail-send",
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [900, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-oauth",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fields": {
+          "values": [
+            {
+              "name": "sent_at",
+              "stringValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "name": "status",
+              "stringValue": "delivered"
+            },
+            {
+              "name": "recipient",
+              "stringValue": "={{ $json.to }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n8n-set-status",
+      "name": "Log Send Status",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Daily Trigger 7AM IST": {
+      "main": [[{ "node": "Get Daily Digest", "type": "main", "index": 0 }]]
+    },
+    "Get Daily Digest": {
+      "main": [[{ "node": "Format HTML Email", "type": "main", "index": 0 }]]
+    },
+    "Format HTML Email": {
+      "main": [[{ "node": "Send Gmail", "type": "main", "index": 0 }]]
+    },
+    "Send Gmail": {
+      "main": [[{ "node": "Log Send Status", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "id": "yaazhi-email-digest",
+  "tags": ["yaazhi", "digest", "email"]
+}

@@ -1,0 +1,155 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# YAAZHI — Production Dependencies (pinned == versions, May 2026)
+# Audit fixes: DEP-1 (pinned), DEP-2 (unused removed), DEP-3 (PyPDF2→pypdf)
+# Install: pip install -r requirements.txt
+# Regenerate: pip-compile requirements.in --output-file requirements.txt
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 1 — Orchestration & LLM Routing
+# ───────────────────────────────────────────────────────────────────────────
+
+langgraph==0.2.28
+langchain==0.3.7
+langchain-core==0.3.15
+langchain-community==0.3.7
+langchain-groq==0.2.1
+langchain-google-genai==2.0.7
+langchain-anthropic==0.3.3
+
+# Sandbox execution (SEC-2 fix)
+langchain-sandbox==0.0.3
+
+# LiteLLM — universal model router
+litellm==1.52.9
+
+# Provider SDKs
+openai==1.54.4
+anthropic==0.40.0
+google-generativeai==0.8.3
+groq==0.12.0
+
+# Structured AI output
+pydantic==2.9.2
+pydantic-settings==2.6.1
+pydantic-ai==0.0.14
+
+# Instructor for structured outputs
+instructor==1.7.0
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 2 — Internet Actions & Automation
+# ───────────────────────────────────────────────────────────────────────────
+
+# Browser automation
+browser-use==0.1.40
+playwright==1.48.0
+
+# Web scraping
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# HTTP clients
+requests==2.32.3
+httpx==0.27.2
+aiohttp==3.10.10
+aiofiles==24.1.0
+
+# Search
+duckduckgo-search==6.3.7
+
+# MQTT (IoT integration)
+paho-mqtt==2.1.0
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 3 — Memory & Knowledge
+# ───────────────────────────────────────────────────────────────────────────
+
+# Vector databases
+chromadb==0.5.20
+
+# PostgreSQL + pgvector
+asyncpg==0.30.0
+pgvector==0.3.5
+
+# Redis
+redis==5.2.1
+
+# Dedicated AI memory layer (Mem0 — namespaced memory, Upgrade 3.2)
+mem0ai==0.1.29
+
+# Semantic embeddings (used by Mem0 HuggingFace provider)
+sentence-transformers==3.3.1
+
+# Document parsing — DEP-3 fix: pypdf not PyPDF2
+pypdf==4.3.1
+python-docx==1.1.2
+python-pptx==1.0.2
+
+# Token counting
+tiktoken==0.8.0
+
+# File system watching (auto-ingest)
+watchdog==5.0.3
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 4 — Interface, Voice & API
+# ───────────────────────────────────────────────────────────────────────────
+
+# FastAPI
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+uvloop==0.21.0
+
+# Streamlit dashboard
+streamlit==1.40.2
+
+# Voice — STT (Whisper)
+openai-whisper==20231117
+
+# Voice — TTS (Coqui XTTS v2)
+TTS==0.22.0
+
+# Wake word detection
+openwakeword==0.6.0
+
+# Audio I/O
+pyaudio==0.2.14
+sounddevice==0.5.1
+soundfile==0.12.1
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 5 — Observability & Ops
+# ───────────────────────────────────────────────────────────────────────────
+
+# Prometheus metrics
+prometheus-client==0.21.1
+
+# LangSmith tracing
+langsmith==0.1.147
+
+# Logfire observability
+logfire==0.52.0
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLOCK 6 — Utilities
+# ───────────────────────────────────────────────────────────────────────────
+
+# Environment configuration
+python-dotenv==1.0.1
+
+# YAML parsing
+pyyaml==6.0.2
+
+# CLI
+tqdm==4.67.1
+rich==13.9.4
+
+# Dependency management
+pip-tools==7.4.1
+
+# Hashing
+xxhash==3.5.0
+
+# Clipboard
+pyperclip==1.9.0

@@ -1,0 +1,318 @@
+# ─── Yaazhi Infrastructure — Oracle Cloud ARM64 24 GB ────────────────────────
+# Audit fixes applied (2026-05-10):
+#   INF-1 : ChromaDB uses token auth (CHROMA_SERVER_AUTH_PROVIDER)
+#   INF-2 : Redis requires password (--requirepass)
+#   INF-3 : PostgreSQL port NOT exposed — internal network only
+#   INF-4 : n8n WEBHOOK_URL read from env
+#   INF-5 : version: field removed (Docker Compose v2)
+#   SEC   : Separate internal (db) and external (app) networks
+#
+# RAM budget (24 GB VPS):
+#   chroma 2G + postgres 2G + redis 1G + n8n 1G + prometheus 512M
+#   + grafana 512M + uptime 256M ≈ 7.3 GB used
+#   Remaining ≈ 16.7 GB for Ollama + Yaazhi API + Whisper + headroom
+
+networks:
+  # Internal network — databases only; no host exposure
+  yaazhi-db-net:
+    driver: bridge
+    internal: true
+    name: yaazhi-db-net
+
+  # External network — application services that need internet
+  yaazhi-app-net:
+    driver: bridge
+    internal: false
+    name: yaazhi-app-net
+
+volumes:
+  chroma_data:
+  pgdata:
+  redis_data:
+  n8n_data:
+  prometheus_data:
+  grafana_data:
+  uptime_data:
+
+services:
+
+  # ── ChromaDB Vector Store ────────────────────────────────────────────────────
+  yaazhi-chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: yaazhi-chroma
+    platform: linux/arm64
+    # Port NOT exposed to host — only reachable via yaazhi-db-net
+    expose:
+      - "8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+      # SEC: Token-based authentication (INF-1)
+      CHROMA_SERVER_AUTH_PROVIDER: "chromadb.auth.token.TokenAuthServerProvider"
+      CHROMA_SERVER_AUTH_CREDENTIALS: "${CHROMA_TOKEN}"
+      CHROMA_SERVER_AUTH_TOKEN_TRANSPORT_HEADER: "X-Chroma-Token"
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f",
+             "-H", "X-Chroma-Token: ${CHROMA_TOKEN}",
+             "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - yaazhi-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────────────────────────
+  yaazhi-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: yaazhi-postgres
+    platform: linux/arm64
+    # INF-3: No ports: block — PostgreSQL is internal-only
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: yaazhi
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: yaazhi_db
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yaazhi -d yaazhi_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - yaazhi-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  yaazhi-redis:
+    image: redis:7.2-alpine
+    container_name: yaazhi-redis
+    platform: linux/arm64
+    # INF-2: Requires password — no unauthenticated access
+    expose:
+      - "6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis_data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - yaazhi-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Ollama Local LLM ─────────────────────────────────────────────────────────
+  yaazhi-ollama:
+    image: ollama/ollama:latest
+    container_name: yaazhi-ollama
+    platform: linux/arm64
+    expose:
+      - "11434"
+    volumes:
+      - ./ollama_models:/root/.ollama
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - yaazhi-db-net
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+
+  # ── n8n Workflow Automation ───────────────────────────────────────────────────
+  yaazhi-n8n:
+    image: n8nio/n8n:1.47.1
+    container_name: yaazhi-n8n
+    platform: linux/arm64
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: "${N8N_BASIC_AUTH_USER}"
+      N8N_BASIC_AUTH_PASSWORD: "${N8N_BASIC_AUTH_PASSWORD}"
+      GENERIC_TIMEZONE: Asia/Kolkata
+      N8N_HOST: "${N8N_HOST:-localhost}"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "${N8N_PROTOCOL:-http}"
+      # INF-4: Webhook URL from env — not hardcoded to localhost
+      WEBHOOK_URL: "${N8N_WEBHOOK_URL}"
+      N8N_LOG_LEVEL: info
+      N8N_METRICS: "true"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      DB_TYPE: sqlite
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Yaazhi API (FastAPI) ──────────────────────────────────────────────────────
+  yaazhi-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yaazhi-api
+    platform: linux/arm64
+    ports:
+      - "8000:8000"
+    env_file:
+      - config/.env
+    depends_on:
+      yaazhi-chroma:
+        condition: service_healthy
+      yaazhi-postgres:
+        condition: service_healthy
+      yaazhi-redis:
+        condition: service_healthy
+      # D-02 FIX: API must wait for Ollama to be healthy before starting.
+      # Ollama loads nomic-embed-text on cold start (30-60s). Without this,
+      # ALL memory operations fail silently until Ollama finishes loading.
+      yaazhi-ollama:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    networks:
+      - yaazhi-db-net
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          # D-03 FIX: Increased from 4G. Budget breakdown:
+          # Whisper base ~1.5GB + Coqui XTTS v2 ~2GB + sentence-transformers ~0.5GB
+          # + FastAPI app ~0.5GB + headroom = ~5GB. 6G gives safe overhead.
+          memory: 6G
+
+  # ── Prometheus Metrics ────────────────────────────────────────────────────────
+  yaazhi-prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: yaazhi-prometheus
+    platform: linux/arm64
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Grafana Dashboards ────────────────────────────────────────────────────────
+  yaazhi-grafana:
+    image: grafana/grafana:11.1.0
+    container_name: yaazhi-grafana
+    platform: linux/arm64
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - yaazhi-prometheus
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Uptime Kuma ───────────────────────────────────────────────────────────────
+  yaazhi-uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: yaazhi-uptime-kuma
+    platform: linux/arm64
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime_data:/app/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - yaazhi-app-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
