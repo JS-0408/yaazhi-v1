@@ -43,13 +43,27 @@ class MemorySettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file="config/.env", extra="ignore")
 
-    chromadb_host: str = Field(default="localhost", description="ChromaDB hostname")
-    chromadb_port: int = Field(default=8001, description="ChromaDB port")
-    postgres_url: str = Field(default="", description="PostgreSQL connection URL with pgvector")
-    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
-    mem0_api_key: str = Field(default="", description="Mem0 API key for episodic memory")
-    supabase_url: str = Field(default="", description="Supabase project URL")
-    supabase_key: str = Field(default="", description="Supabase anonymous key")
+    # PRIMARY backend selector — one of: pgvector | chromadb | mem0
+    # Default: pgvector (Supabase/Neon, no card required)
+    vector_backend: str = Field(default="pgvector", description="Primary vector backend: pgvector|chromadb|mem0")
+
+    # REQUIRED: PostgreSQL + pgvector connection string (primary backend)
+    postgres_url: str = Field(default="", description="PostgreSQL connection URL with pgvector extension")
+
+    # REQUIRED: Redis — pure read-through cache in front of the primary backend
+    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL (Upstash free tier works)")
+
+    # OPTIONAL/EXPERIMENTAL: ChromaDB — only used when VECTOR_BACKEND=chromadb
+    chromadb_host: str = Field(default="localhost", description="[OPTIONAL] ChromaDB hostname")
+    chromadb_port: int = Field(default=8001, description="[OPTIONAL] ChromaDB port")
+    chroma_persist_path: str = Field(default="./chroma_data", description="[OPTIONAL] ChromaDB local persistence path")
+
+    # OPTIONAL/EXPERIMENTAL: Mem0 — only used when VECTOR_BACKEND=mem0
+    mem0_api_key: str = Field(default="", description="[OPTIONAL] Mem0 cloud API key")
+
+    # OPTIONAL: Supabase convenience shortcuts (postgres_url still required)
+    supabase_url: str = Field(default="", description="[OPTIONAL] Supabase project URL")
+    supabase_key: str = Field(default="", description="[OPTIONAL] Supabase anonymous key")
 
 
 class VoiceSettings(BaseSettings):
@@ -168,12 +182,19 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="")
     ollama_base_url: str = Field(default="http://localhost:11434")
 
-    # ── Memory ───────────────────────────────────────────
+    # ── Memory (primary backend controlled by VECTOR_BACKEND) ──────────────
+    # REQUIRED: declare which backend is primary (pgvector | chromadb | mem0)
+    vector_backend: str = Field(default="pgvector")
+    # REQUIRED: pgvector URI — use Supabase or Neon free tier (no card needed)
+    postgres_url: str = Field(default="")
+    # REQUIRED: Redis URI — use Upstash free tier (no card needed)
+    redis_url: str = Field(default="redis://localhost:6379/0")
+    # OPTIONAL/EXPERIMENTAL: only active when VECTOR_BACKEND=chromadb
     chromadb_host: str = Field(default="localhost")
     chromadb_port: int = Field(default=8001)
-    postgres_url: str = Field(default="")
-    redis_url: str = Field(default="redis://localhost:6379/0")
+    # OPTIONAL/EXPERIMENTAL: only active when VECTOR_BACKEND=mem0
     mem0_api_key: str = Field(default="")
+    # OPTIONAL: Supabase convenience shortcuts
     supabase_url: str = Field(default="")
     supabase_key: str = Field(default="")
 
@@ -226,7 +247,8 @@ class Settings(BaseSettings):
     default_user_id: str = Field(default="default", description="Default user namespace for memory ops")
     uploads_path: str = Field(default="/tmp/yaazhi_uploads", description="Directory for uploaded files")
     daily_budget_usd: float = Field(default=1.0, description="Daily LLM spend alert threshold in USD")
-    chroma_persist_path: str = Field(default="./chroma_data", description="ChromaDB local persistence path")
+    # chroma_persist_path duplicated from MemorySettings for backwards compat
+    chroma_persist_path: str = Field(default="./chroma_data", description="[OPTIONAL] ChromaDB local persistence path")
 
     @field_validator("allowed_origins")
     @classmethod
@@ -257,6 +279,21 @@ class Settings(BaseSettings):
             Full ChromaDB URL string.
         """
         return f"http://{self.chromadb_host}:{self.chromadb_port}"
+
+    @property
+    def use_chromadb(self) -> bool:
+        """True only when VECTOR_BACKEND=chromadb (OPTIONAL/EXPERIMENTAL)."""
+        return self.vector_backend.lower() == "chromadb"
+
+    @property
+    def use_mem0(self) -> bool:
+        """True only when VECTOR_BACKEND=mem0 (OPTIONAL/EXPERIMENTAL)."""
+        return self.vector_backend.lower() == "mem0"
+
+    @property
+    def use_pgvector(self) -> bool:
+        """True when VECTOR_BACKEND=pgvector (default, recommended)."""
+        return self.vector_backend.lower() == "pgvector"
 
     def validate_critical_keys(self) -> None:
         """

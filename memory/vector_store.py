@@ -98,14 +98,20 @@ class VectorStore:
         self._pg_pool: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
         self._fallback_memory: list[dict[str, Any]] = []
-        self._use_mem0: bool = _MEM0_AVAILABLE
-        self._use_chroma: bool = True
         self._collection_name: str = "yaazhi_memories"
         self._embed_dim: int = 768
         self._http: Optional[httpx.AsyncClient] = None
         # Optional retriever reference — set by app startup so add() can
         # call index_memory() unconditionally after every successful write.
         self._retriever: Optional[Any] = None
+
+        # Phase 1: primary backend is explicitly set by VECTOR_BACKEND config.
+        # Fallback import-time detection is the secondary guard only.
+        _backend = settings.vector_backend.lower()
+        self._use_mem0: bool   = (_backend == "mem0")   and _MEM0_AVAILABLE
+        self._use_chroma: bool = (_backend == "chromadb") and _CHROMA_AVAILABLE
+        # pgvector is always available as the final persistence path.
+        # In-memory fallback exists only for tests and fully-degraded mode.
 
     def __repr__(self) -> str:
         if self._use_mem0 and self._mem0:

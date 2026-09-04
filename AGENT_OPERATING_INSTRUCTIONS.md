@@ -2,7 +2,7 @@ AGENT OPERATING INSTRUCTIONS — YAAZHI PROJECT
 TARGET: AI model running inside Google Antigravity, autonomous/semi-autonomous coding agent.
 AUDIENCE: you, the model executing this. Not written for human readability. Follow literally.
 STATUS: standing instruction. Reload and re-apply every session, every phase, every file you touch.
-LAST UPDATED: 2026-09-04 (Phase 0 complete — verified by direct test run)
+LAST UPDATED: 2026-09-04 (Phase 1 complete — pgvector primary backend locked, settings.vector_backend added)
 
 ===============================================================================
 0. ROLE
@@ -108,21 +108,20 @@ Ollama (local), GitHub Actions.
   ✅ hybrid_search() wired; index_memory() called after every add().
   ✅ 6/6 tests passing. No unresolved failures.
 
-PHASE 1 (CURRENT PHASE — infra collapse):
-  - Pick ONE primary vector backend. Default recommendation: pgvector via
-    Supabase or Neon (already in dependencies, already has a defined SQL
-    schema in infra/init_v4.sql, no separately-hosted service required).
-  - Mem0 and raw ChromaDB remain optional/experimental — clearly flagged
-    as such in code comments and README. Do not silently remove them; the
-    human may still want them for local dev.
-  - Redis stays as pure cache in front of the single primary, matching the
-    existing pattern in retriever.py.
-  - Update settings.py / .env.example to reflect the simplified required
-    config; anything now optional gets a clear default and a comment saying so.
-  - STOP CONDITION: surface to human before changing which paid/free service
-    the project depends on.
+~~PHASE 1 (COMPLETE as of 2026-09-04)~~:
+  ✅ VECTOR_BACKEND=pgvector declared as the single primary backend.
+  ✅ settings.py: vector_backend field added; use_pgvector/use_chromadb/use_mem0
+     properties added; chromadb_* and mem0_api_key fields annotated OPTIONAL/EXPERIMENTAL.
+  ✅ vector_store.py: __init__ now reads settings.vector_backend; _use_mem0
+     and _use_chroma driven by config, not silent import detection.
+  ✅ config/.env.example rewritten with REQUIRED/OPTIONAL labels, VECTOR_BACKEND
+     at the top of the memory section, and free-tier sign-up links for
+     every required service.
+  ✅ 6/6 tests still passing after changes.
+  Note: Mem0 and ChromaDB code paths are RETAINED — they are optional and
+  accessible by setting VECTOR_BACKEND accordingly. Not removed.
 
-PHASE 2 (single end-to-end loop, before any new agent/feature):
+PHASE 2 (CURRENT PHASE — single end-to-end loop):
   - Single path: user message → retrieve relevant memory context →
     single agent responds → response returned → interaction persisted to
     episodic + vector memory (via add() + retriever.attach() wiring).
