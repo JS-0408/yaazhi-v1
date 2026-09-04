@@ -50,6 +50,15 @@ class SemanticRetriever:
     def __repr__(self) -> str:
         return f"SemanticRetriever(vector_store={self._vs!r})"
 
+    def attach(self) -> None:
+        """
+        Wire this retriever into the VectorStore so that index_memory() is
+        called after every successful add().  Call once at app startup:
+            retriever = SemanticRetriever(vector_store)
+            retriever.attach()
+        """
+        self._vs._retriever = self
+
     async def _ensure_redis(self) -> None:
         if self._redis is None:
             self._redis = aioredis.from_url(

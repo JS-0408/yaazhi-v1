@@ -103,6 +103,9 @@ class VectorStore:
         self._collection_name: str = "yaazhi_memories"
         self._embed_dim: int = 768
         self._http: Optional[httpx.AsyncClient] = None
+        # Optional retriever reference — set by app startup so add() can
+        # call index_memory() unconditionally after every successful write.
+        self._retriever: Optional[Any] = None
 
     def __repr__(self) -> str:
         if self._use_mem0 and self._mem0:
@@ -359,6 +362,7 @@ class VectorStore:
                     memory_id = result["results"][0].get("id", memory_id)
                 duration_ms = int((time.time() - t_start) * 1000)
                 logfire.info("VectorStore.add success (Mem0)", memory_id=memory_id, duration_ms=duration_ms)
+                await self._post_add_index(memory_id)
                 return memory_id
             except Exception as exc:
                 logfire.warning("Mem0 add failed, falling back to ChromaDB", error=str(exc))
@@ -378,6 +382,7 @@ class VectorStore:
                 )
                 duration_ms = int((time.time() - t_start) * 1000)
                 logfire.info("VectorStore.add success (ChromaDB)", memory_id=memory_id, duration_ms=duration_ms)
+                await self._post_add_index(memory_id)
                 return memory_id
             except Exception as exc:
                 logfire.warning("ChromaDB add failed, switching to pgvector", error=str(exc))
@@ -392,8 +397,7 @@ class VectorStore:
                     """
                     INSERT INTO yaazhi_memories (id, content, embedding, metadata, source)
                     VALUES ($1, $2, $3::vector, $4::jsonb, $5)
-                    """
-                    ,
+                    """,
                     uuid.UUID(memory_id),
                     text,
                     self._pg_vector_literal(embedding),   # M4 FIX
@@ -402,6 +406,7 @@ class VectorStore:
                 )
             duration_ms = int((time.time() - t_start) * 1000)
             logfire.info("VectorStore.add success (pgvector)", memory_id=memory_id, duration_ms=duration_ms)
+            await self._post_add_index(memory_id)
             return memory_id
 
         # ── In-memory fallback path for tests and degraded mode ─────────────
@@ -415,23 +420,7 @@ class VectorStore:
         )
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("VectorStore.add success (in-memory fallback)", memory_id=memory_id, duration_ms=duration_ms)
-        return memory_id
-
-        async with self._pg_pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO yaazhi_memories (id, content, embedding, metadata, source)
-                VALUES ($1, $2, $3::vector, $4::jsonb, $5)
-                """,
-                uuid.UUID(memory_id),
-                text,
-                self._pg_vector_literal(embedding),   # M4 FIX
-                json.dumps(meta, ensure_ascii=False),
-                source,
-            )
-
-        duration_ms = int((time.time() - t_start) * 1000)
-        logfire.info("VectorStore.add success (pgvector)", memory_id=memory_id, duration_ms=duration_ms)
+        await self._post_add_index(memory_id)
         return memory_id
 
     # ------------------------------------------------------------------
@@ -516,12 +505,17 @@ class VectorStore:
 
         if self._use_chroma and self._chroma_collection:
             try:
-                where = filter if filter else None
+                # P1.1: user_id isolation enforced unconditionally on the
+                # ChromaDB path — not left to the caller to pass in via filter.
+                chroma_where: Optional[dict[str, Any]] = dict(filter) if filter else {}
+                chroma_where["user_id"] = uid
+                # ChromaDB requires at least one filter key when `where` is used;
+                # always true here since user_id is always set.
                 raw = await asyncio.to_thread(
                     self._chroma_collection.query,
                     query_embeddings=[embedding],
                     n_results=top_k,
-                    where=where,
+                    where=chroma_where,
                     include=["documents", "metadatas", "distances"],
                 )
                 for i, doc in enumerate(raw["documents"][0]):
@@ -718,6 +712,27 @@ class VectorStore:
             await fh.write(json.dumps(records, indent=2, default=str, ensure_ascii=False))
 
         logfire.info("VectorStore.export_backup success", path=path, records=len(records))
+
+    # ------------------------------------------------------------------
+    # _post_add_index — wire index_memory after every successful add()
+    # ------------------------------------------------------------------
+
+    async def _post_add_index(self, memory_id: str) -> None:
+        """
+        Call retriever.index_memory() after every successful add() so that
+        hybrid_search() can locate memories via the sorted-set index without
+        requiring a prior semantic query.
+
+        Only runs when self._retriever is set (wired at app startup via
+        SemanticRetriever.attach(vector_store)).  Failures are logged and
+        swallowed — they must not block the add() return path.
+        """
+        if self._retriever is None:
+            return
+        try:
+            await self._retriever.index_memory(memory_id)
+        except Exception as exc:
+            logfire.warning("VectorStore._post_add_index failed", memory_id=memory_id[:8], error=str(exc))
 
     # ------------------------------------------------------------------
     # close
