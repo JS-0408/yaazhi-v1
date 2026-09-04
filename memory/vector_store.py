@@ -513,10 +513,16 @@ class VectorStore:
             try:
                 # P1.1: user_id isolation enforced unconditionally on the
                 # ChromaDB path — not left to the caller to pass in via filter.
-                chroma_where: Optional[dict[str, Any]] = dict(filter) if filter else {}
-                chroma_where["user_id"] = uid
-                # ChromaDB requires at least one filter key when `where` is used;
-                # always true here since user_id is always set.
+                #
+                # ChromaDB 0.5.x requires multi-condition filters to be wrapped
+                # in $and — a flat dict with >1 key throws ValueError at runtime.
+                # ref: https://docs.trychroma.com/usage-guide#using-where-filters
+                _conditions: dict[str, Any] = dict(filter) if filter else {}
+                _conditions["user_id"] = uid
+                if len(_conditions) > 1:
+                    chroma_where: Any = {"$and": [{k: v} for k, v in _conditions.items()]}
+                else:
+                    chroma_where = _conditions
                 raw = await asyncio.to_thread(
                     self._chroma_collection.query,
                     query_embeddings=[embedding],

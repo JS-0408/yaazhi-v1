@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     episodic = EpisodicMemory()
     prefs = PreferenceStore(episodic)  # A-07 FIX: pass episodic instance
     retriever = SemanticRetriever(vs)
+    retriever.attach()   # wire: vs._retriever = retriever so _post_add_index() fires on every add()
     ingester = DocumentIngester(vs)
     browser = BrowserAgent()
     notifier = NotifierAgent()

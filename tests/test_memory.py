@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -145,3 +146,94 @@ async def test_embed_cache_key_full_sha256(mock_redis):
     set_calls = [str(call) for call in mock_redis.set.call_args_list]
     assert any(full_digest in call for call in set_calls), \
         "Expected full 64-char SHA-256 digest in cache key"
+
+
+# ---------------------------------------------------------------------------
+# ChromaDB $and wrapping — regression for multi-condition filter crash
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chroma_search_multi_filter_uses_and_operator(mock_chroma_collection, mock_redis):
+    """
+    Regression: ChromaDB 0.5.x raises ValueError for flat dicts with >1 key.
+    When both user_id isolation AND a caller-supplied filter (e.g. session_id)
+    are present, the where clause must be wrapped in $and.
+    """
+    vs = VectorStore()
+    vs._use_mem0 = False
+    vs._use_chroma = True
+    vs._chroma_collection = mock_chroma_collection
+    vs._redis = mock_redis
+
+    captured_where: list[Any] = []
+
+    original_query = mock_chroma_collection.query
+
+    def capturing_query(**kwargs):
+        captured_where.append(kwargs.get("where"))
+        return original_query(**kwargs)
+
+    mock_chroma_collection.query = capturing_query
+
+    with patch.object(vs, "_embed", new_callable=AsyncMock, return_value=[0.1] * 768):
+        # Pass a secondary filter alongside user_id isolation
+        await vs.search(
+            "test query",
+            top_k=1,
+            filter={"session_id": "sess-abc"},
+            user_id="alice",
+        )
+
+    assert len(captured_where) == 1, "Expected exactly one ChromaDB query call"
+    where = captured_where[0]
+    # Must be wrapped in $and — never a flat dict with two keys
+    assert "$and" in where, (
+        f"Expected $and wrapper for multi-condition filter, got: {where!r}"
+    )
+    # Both conditions must be present within $and
+    and_keys = {list(c.keys())[0] for c in where["$and"]}
+    assert "user_id" in and_keys, "user_id must be in $and conditions"
+    assert "session_id" in and_keys, "session_id must be in $and conditions"
+
+
+# ---------------------------------------------------------------------------
+# retriever.attach() — regression for inert _post_add_index chain
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_retriever_attach_wires_vector_store():
+    """
+    Regression: attach() must set vs._retriever so _post_add_index() is not
+    a permanent no-op. Verifies the actual connection at the attribute level.
+    """
+    vs = VectorStore()
+    retriever = SemanticRetriever(vs)
+
+    # Before attach(): _retriever must be None
+    assert vs._retriever is None, "Expected _retriever to be None before attach()"
+
+    retriever.attach()
+
+    # After attach(): _retriever must point to the retriever instance
+    assert vs._retriever is retriever, (
+        "attach() must set vs._retriever = retriever so _post_add_index fires"
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_add_index_calls_index_memory(mock_redis):
+    """
+    Verify _post_add_index() actually calls retriever.index_memory() when
+    _retriever is wired in — not silently no-ops.
+    """
+    vs = VectorStore()
+    vs._use_mem0 = False
+    vs._use_chroma = False
+    vs._redis = mock_redis
+
+    retriever_mock = AsyncMock()
+    retriever_mock.index_memory = AsyncMock()
+    vs._retriever = retriever_mock  # simulate attach()
+
+    await vs._post_add_index("mem-test-id")
+    retriever_mock.index_memory.assert_called_once_with("mem-test-id")
