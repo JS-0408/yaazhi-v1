@@ -127,10 +127,19 @@ async def test_retriever_cache_hit(mock_redis):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_embed_cache_key_full_sha256(mock_redis):
+async def test_embed_cache_key_full_sha256():
+    """
+    M3 fix: _embed() must use the full 64-char SHA-256 digest in the cache key,
+    not a truncated prefix. Verified by reading the key written to a real
+    fakeredis instance — works regardless of mock vs. real Redis implementation.
+    """
     import hashlib
+    import fakeredis.aioredis as fakeredis_aioredis
+
+    fake_redis = fakeredis_aioredis.FakeRedis()
+
     vs = VectorStore()
-    vs._redis = mock_redis
+    vs._redis = fake_redis
     vs._http = AsyncMock()
     vs._http.post = AsyncMock(return_value=MagicMock(
         status_code=200,
@@ -139,13 +148,17 @@ async def test_embed_cache_key_full_sha256(mock_redis):
 
     text = "test embedding text"
     full_digest = hashlib.sha256(text.encode()).hexdigest()
-    assert len(full_digest) == 64   # M3 fix: full digest
+    assert len(full_digest) == 64, "SHA-256 hex digest must be 64 chars"
 
     await vs._embed(text)
-    # Verify the cache set was called with a key containing the full digest
-    set_calls = [str(call) for call in mock_redis.set.call_args_list]
-    assert any(full_digest in call for call in set_calls), \
-        "Expected full 64-char SHA-256 digest in cache key"
+
+    # Read all keys written to Redis — the cache key must contain the full digest
+    all_keys = await fake_redis.keys("*")
+    key_strs = [k.decode() if isinstance(k, bytes) else k for k in all_keys]
+    assert any(full_digest in k for k in key_strs), (
+        f"Expected full 64-char SHA-256 digest '{full_digest}' in a Redis key, "
+        f"got keys: {key_strs!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +250,96 @@ async def test_post_add_index_calls_index_memory(mock_redis):
 
     await vs._post_add_index("mem-test-id")
     retriever_mock.index_memory.assert_called_once_with("mem-test-id")
+
+
+# ---------------------------------------------------------------------------
+# Redis sorted-set STATE verification — not just execution
+# ---------------------------------------------------------------------------
+# These tests use a real fakeredis.aioredis.FakeRedis instance so that zadd()
+# actually stores entries in an in-memory sorted set. Prior tests only checked
+# that index_memory() was *called*; these check that the entry is *retrievable*.
+
+@pytest.mark.asyncio
+async def test_index_memory_populates_redis_sorted_set():
+    """
+    index_memory() must actually insert a ZADD entry into the sorted set at
+    key 'yaazhi:memory_index'. Verified against a real fakeredis instance —
+    WOULD HAVE FAILED before the attach() fix (zadd never reached Redis because
+    _retriever was None, so retriever._redis was never connected).
+    """
+    import fakeredis.aioredis as fakeredis_aioredis
+    from memory.retriever import SemanticRetriever, _MEMORY_INDEX_KEY
+
+    fake_redis = fakeredis_aioredis.FakeRedis()
+
+    vs = VectorStore()
+    retriever = SemanticRetriever(vs)
+    retriever._redis = fake_redis  # inject real fakeredis — no external server needed
+
+    memory_id = "test-mem-state-001"
+    await retriever.index_memory(memory_id)
+
+    # Assert the sorted-set entry exists with the correct member
+    members = await fake_redis.zrange(_MEMORY_INDEX_KEY, 0, -1)
+    assert any(
+        (m.decode() if isinstance(m, bytes) else m) == memory_id
+        for m in members
+    ), (
+        f"Expected '{memory_id}' in sorted set '{_MEMORY_INDEX_KEY}', "
+        f"got: {members!r}"
+    )
+
+    # Score must be a valid Unix timestamp (non-zero)
+    scores = await fake_redis.zscore(_MEMORY_INDEX_KEY, memory_id)
+    assert scores is not None and scores > 0, (
+        f"Expected positive timestamp score for '{memory_id}', got: {scores!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_through_attach_populates_redis_sorted_set(monkeypatch):
+    """
+    Full pipeline: VectorStore.add() → _post_add_index() → retriever.index_memory()
+    → zadd() must insert into 'yaazhi:memory_index' in Redis.
+
+    This test uses attach() to wire the retriever — the same path exercised at
+    app startup — and verifies end-to-end that adding a memory results in a
+    populated sorted-set entry.
+
+    WOULD HAVE FAILED before both fixes:
+      - Before $and fix: not relevant here (pgvector path used)
+      - Before attach() fix: _post_add_index() would no-op because _retriever is None
+    """
+    import fakeredis.aioredis as fakeredis_aioredis
+    from memory.retriever import SemanticRetriever, _MEMORY_INDEX_KEY
+
+    fake_redis = fakeredis_aioredis.FakeRedis()
+
+    vs = VectorStore()
+    vs._use_mem0 = False
+    vs._use_chroma = False
+    vs._pg_pool = None          # force in-memory fallback path — no DB needed
+    vs._redis = fake_redis      # embed caching and future searches
+
+    retriever = SemanticRetriever(vs)
+    retriever._redis = fake_redis
+    retriever.attach()          # the critical wiring step
+
+    # Stub _embed to avoid real HTTP call
+    returned_id: list[str] = []
+    with patch.object(vs, "_embed", new_callable=AsyncMock, return_value=[0.0] * 768):
+        mem_id = await vs.add(
+            text="Santhosh prefers concise answers.",
+            user_id="santhosh",
+            source="manual",
+        )
+        returned_id.append(mem_id)
+
+    # The add() call must have propagated to the Redis sorted set
+    members = await fake_redis.zrange(_MEMORY_INDEX_KEY, 0, -1)
+    member_strs = [m.decode() if isinstance(m, bytes) else m for m in members]
+    assert returned_id[0] in member_strs, (
+        f"Expected memory_id '{returned_id[0]}' in Redis sorted set after add(), "
+        f"but got members: {member_strs!r}. "
+        f"This means _post_add_index() did not fire — attach() likely not wired."
+    )
