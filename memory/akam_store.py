@@ -118,7 +118,7 @@ class AkamStore:
         try:
             import asyncpg  # type: ignore
             self._pg_pool = await asyncpg.create_pool(
-                settings.postgres_url, min_size=1, max_size=3
+                settings.postgres_url, min_size=1, max_size=3, statement_cache_size=0
             )
         except Exception as exc:
             logfire.warning("AkamStore: PostgreSQL pool failed", error=str(exc))

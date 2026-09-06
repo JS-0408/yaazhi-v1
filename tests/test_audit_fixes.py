@@ -356,7 +356,8 @@ class TestVectorStoreFallbackChain:
             "metadata": json.dumps({"source": "test"}),
             "embedding": None,
             "created_at": "2026-05-14T00:00:00+00:00",
-            1 - 0.9: None,  # distance column
+            "distance": 0.1,  # distance column
+            "source": "test",
         }.get(k, None)
 
         mock_conn = AsyncMock()
@@ -395,6 +396,7 @@ class TestVectorStoreFallbackChain:
         vs._chroma_collection = MagicMock()
         vs._chroma_collection.query = MagicMock(side_effect=RuntimeError("Chroma down"))
         vs._pg_pool = None   # pgvector disabled
+        vs._fallback_memory = []
         vs._embed_cache = {}
         vs._embed = AsyncMock(return_value=[0.1] * 768)
         vs._ensure_clients = AsyncMock()

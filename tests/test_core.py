@@ -42,12 +42,12 @@ class TestStateSchema:
         assert task.requires_human_approval is False
         assert isinstance(task.task_id, str) and len(task.task_id) > 0
 
-    def test_task_plan_max_7_subtasks(self):
-        """TaskPlan should reject more than 7 subtasks."""
+    def test_task_plan_max_10_subtasks(self):
+        """TaskPlan should reject more than 10 subtasks."""
         from core.state import SubTask, TaskPlan, TaskType
         tasks = [
             SubTask(task_type=TaskType.RESEARCH, description=f"task {i}")
-            for i in range(8)
+            for i in range(11)
         ]
         with pytest.raises(Exception):
             TaskPlan(tasks=tasks)
@@ -177,14 +177,14 @@ class TestPlanner:
 
     @patch("core.planner.litellm")
     @pytest.mark.asyncio
-    async def test_plan_respects_max_7_tasks(self, mock_litellm):
-        """Planner should never return more than 7 subtasks."""
+    async def test_plan_respects_max_10_tasks(self, mock_litellm):
+        """Planner should never return more than 10 subtasks."""
         import json
 
-        # Return 10 tasks — planner must trim to 7
+        # Return 12 tasks — planner must trim or validate
         tasks = [{"task_type": "research", "description": f"task {i}",
                    "priority": 3, "dependencies": [], "estimated_duration_seconds": 30,
-                   "requires_human_approval": False} for i in range(10)]
+                   "requires_human_approval": False} for i in range(12)]
         mock_litellm.completion.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content=json.dumps({"tasks": tasks})))]
         )
@@ -192,7 +192,7 @@ class TestPlanner:
         from core.planner import Planner
         planner = Planner()
         plan = await planner.plan("Complex task requiring many steps", context="")
-        assert len(plan.tasks) <= 7
+        assert len(plan.tasks) <= 10
 
     @patch("core.planner.litellm")
     @pytest.mark.asyncio
@@ -241,13 +241,11 @@ class TestReviewer:
 
         mock_litellm.completion.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content=json.dumps({
-                "verdict": "PASS",
-                "relevance_score": 9,
-                "completeness_score": 8,
-                "accuracy_score": 9,
-                "safety_score": 10,
-                "feedback": "",
-                "retry_with_context": "",
+                "relevance": 0.9,
+                "accuracy": 0.9,
+                "completeness": 0.8,
+                "safety": 1.0,
+                "failure_reason": "",
             })))]
         )
 
@@ -273,13 +271,11 @@ class TestReviewer:
 
         mock_litellm.completion.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content=json.dumps({
-                "verdict": "FAIL",
-                "relevance_score": 0,
-                "completeness_score": 0,
-                "accuracy_score": 0,
-                "safety_score": 10,
-                "feedback": "Output is empty.",
-                "retry_with_context": "Please provide a real answer.",
+                "relevance": 0.1,
+                "accuracy": 0.1,
+                "completeness": 0.1,
+                "safety": 1.0,
+                "failure_reason": "Output is empty.",
             })))]
         )
 

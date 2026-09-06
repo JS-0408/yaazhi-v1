@@ -50,7 +50,7 @@ class EpisodicMemory:
         if self._pg_pool is None and settings.postgres_url:
             try:
                 self._pg_pool = await asyncpg.create_pool(
-                    settings.postgres_url, min_size=1, max_size=5
+                    settings.postgres_url, min_size=1, max_size=5, statement_cache_size=0
                 )
             except Exception as exc:
                 logfire.warning("EpisodicMemory: PostgreSQL pool failed", error=str(exc))

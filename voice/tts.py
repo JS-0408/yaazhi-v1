@@ -102,6 +102,8 @@ class TTSEngine:
             RuntimeError: If synthesis fails in both Bhashini and Coqui.
         """
         logfire.debug("TTSEngine.speak", language=language, chars=len(text))
+        if not text or not text.strip():
+            raise ValueError("Text for synthesis cannot be empty.")
         t_start = time.time()
 
         async with self._lock:

@@ -42,6 +42,8 @@ class ContextExtractionMiddleware(BaseHTTPMiddleware):
     _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/metrics"])
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        if request.url.path.startswith("/metrics"):
+            return await call_next(request)
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         
         try:
@@ -104,6 +106,8 @@ class TimingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        if request.url.path.startswith("/metrics"):
+            return await call_next(request)
         t_start = time.perf_counter()
         try:
             response = await call_next(request)
@@ -126,6 +130,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        if request.url.path.startswith("/metrics"):
+            return await call_next(request)
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         t_start = time.perf_counter()
         logfire.debug(
@@ -179,6 +185,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return self._redis
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        if request.url.path.startswith("/metrics"):
+            return await call_next(request)
         try:
             client_ip = request.client.host if request.client else "unknown"
             r = await self._get_redis()
@@ -215,7 +223,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     Always-public paths (no key required): /health, /metrics
     """
 
-    _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/metrics"])
+    _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/metrics", "/metrics/"])
     _DOC_PATHS: frozenset[str] = frozenset(["/docs", "/redoc", "/openapi.json"])
     _LOCALHOST_HOSTS: frozenset[str] = frozenset(["127.0.0.1", "::1", "localhost"])
 
@@ -244,7 +252,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Always-public paths — skip all checks
-        if path in self._PUBLIC_PATHS:
+        if path in self._PUBLIC_PATHS or path.startswith("/metrics"):
             return await call_next(request)
 
         # Documentation paths — localhost only (SEC-5)

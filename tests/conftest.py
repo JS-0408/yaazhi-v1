@@ -18,7 +18,7 @@ try:
 except ImportError:  # pragma: no cover
     fakeredis_aioredis = None
 
-from core.state import YaazhiState
+from core.state import YaazhiState, YaazhiOutput
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +60,7 @@ def stub_prometheus_client(monkeypatch):
 def mock_settings(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
     monkeypatch.setenv("YAAZHI_API_KEY", "test-api-key")
+    monkeypatch.setattr("config.settings.settings.yaazhi_api_key", "test-api-key", raising=False)
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("POSTGRES_URL", "")
     monkeypatch.setenv("DEFAULT_USER_ID", "test_user")
@@ -201,7 +202,7 @@ def test_client():
 
     # Inject mock state
     app.state.yaazhi = AsyncMock()
-    app.state.yaazhi.run = AsyncMock(return_value=MagicMock(
+    app.state.yaazhi.run = AsyncMock(return_value=YaazhiOutput(
         response="Test response",
         session_id="test-session",
         memories_used=0,

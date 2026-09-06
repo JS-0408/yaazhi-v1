@@ -41,6 +41,7 @@ class WakeWordListener:
         self,
         on_wake: Optional[Callable[[], None]] = None,
         model_path: Optional[str] = None,
+        threshold: Optional[float] = None,
     ) -> None:
         """
         Initialise listener.
@@ -49,9 +50,11 @@ class WakeWordListener:
             on_wake   : Sync or async callable fired on wake detection.
             model_path: Path to custom ONNX wake word model. Falls back to
                         hey_jarvis if None or file not found.
+            threshold : Detection confidence threshold (0.0 to 1.0).
         """
         self._on_wake = on_wake
         self._model_path = model_path
+        self._threshold = threshold
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._audio_queue: queue.Queue = queue.Queue()
@@ -273,7 +276,7 @@ class WakeWordListener:
             model = Model()
             prediction = model.predict(audio_array)
             max_score = max(prediction.values(), default=0.0)
-            th = threshold if threshold is not None else settings.wakeword_sensitivity
+            th = threshold if threshold is not None else (self._threshold if getattr(self, "_threshold", None) is not None else settings.wakeword_sensitivity)
             return bool(max_score >= th)
         except Exception:
             return False

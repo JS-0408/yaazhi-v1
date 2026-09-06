@@ -49,11 +49,17 @@ class YaazhiV4(Yaazhi):
         v4_retriever — SemanticRetriever used for Tiṇai-filtered context.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        vector_store: Optional[Any] = None,
+        retriever: Optional[SemanticRetriever] = None,
+    ) -> None:
         super().__init__()
-        self.router      = CognitiveRouter()
+        self.router = CognitiveRouter()
         self.uriporul_sm = uriporul_sm
-        self.v4_retriever = SemanticRetriever()
+        vs = vector_store or getattr(self, "memory", None)
+        self.v4_retriever = retriever or SemanticRetriever(vs)
+        self.v4_retriever.attach()
         logfire.info("YaazhiV4 orchestrator ready")
 
     def __repr__(self) -> str:
@@ -68,6 +74,7 @@ class YaazhiV4(Yaazhi):
         user_input:   str,
         session_id:   Optional[str]   = None,
         kalam_epoch:  Optional[KalamEpoch] = None,
+        context:      Optional[str] = None,
     ) -> YaazhiOutput:
         """
         Process a user request through the full V4 5-step pipeline.
@@ -76,6 +83,7 @@ class YaazhiV4(Yaazhi):
             user_input:  Raw user message.
             session_id:  Optional session ID; generated if absent.
             kalam_epoch: Override the active temporal epoch.
+            context:     Optional context string to inject into state.
 
         Returns:
             YaazhiOutput with final synthesized response.
@@ -130,7 +138,7 @@ class YaazhiV4(Yaazhi):
             logfire.warning("V4.run: context assembly failed", error=str(exc))
             assembled = akam_context  # fallback to Akam snapshot if Puram assembly fails
 
-        combined_context = "\n".join(filter(None, [akam_context, assembled]))
+        combined_context = "\n".join(filter(None, [akam_context, assembled, context]))
 
         # ── Step 4: Multi-Orchestrator Execution via base graph ───────
         initial_state: YaazhiState = make_initial_state(

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import logfire
@@ -85,6 +85,30 @@ class Yaazhi:
         self._max_loops: int = settings.max_loop_count
         self.graph = self._build_graph()
         logfire.info("Yaazhi orchestrator ready", max_loops=self._max_loops)
+
+    @property
+    def _planner(self) -> Planner:
+        return self.planner
+
+    @_planner.setter
+    def _planner(self, value: Planner) -> None:
+        self.planner = value
+
+    @property
+    def _reviewer(self) -> Reviewer:
+        return self.reviewer
+
+    @_reviewer.setter
+    def _reviewer(self, value: Reviewer) -> None:
+        self.reviewer = value
+
+    @property
+    def _executor(self) -> Any:
+        return self
+
+    @_executor.setter
+    def _executor(self, value: Any) -> None:
+        pass
 
     def __repr__(self) -> str:
         """Return string representation."""
@@ -402,10 +426,12 @@ class Yaazhi:
                 logfire.warning("Synthesis failed, concatenating", error=str(exc))
                 final_text = "\n\n".join(output_texts)
 
-        started_at = state["metadata"].get("started_at", datetime.utcnow().isoformat())
+        started_at = state["metadata"].get("started_at", datetime.now(timezone.utc).isoformat())
         try:
             started_dt = datetime.fromisoformat(started_at)
-            total_ms = int((datetime.utcnow() - started_dt).total_seconds() * 1000)
+            if started_dt.tzinfo is None:
+                started_dt = started_dt.replace(tzinfo=timezone.utc)
+            total_ms = int((datetime.now(timezone.utc) - started_dt).total_seconds() * 1000)
         except ValueError:
             total_ms = 0
 

@@ -23,11 +23,12 @@ from core.state import Language
 
 # Patterns that indicate prompt-injection attempts
 _INJECTION_PATTERNS = [
-    re.compile(r"(?i)ignore\s+(all\s+)?previous\s+instructions"),
-    re.compile(r"(?i)you\s+are\s+now\s+(a\s+)?(pirate|different|unrestricted|god|admin)"),
+    re.compile(r"(?i)ignore\s+(all\s+)?(previous\s+)?instructions"),
+    re.compile(r"(?i)(new\s+persona:\s*)?you\s+are\s+(now\s+)?(a\s+)?(pirate|different|unrestricted|god|admin|dan)"),
+    re.compile(r"(?i)(disregard|forget)\s+(your\s+)?(system\s+prompt|everything(\s+above)?|guardrails|instructions)"),
     re.compile(r"(?i)system\s+prompt"),
     re.compile(r"(?i)override\s+core\s+directives"),
-    re.compile(r"(?i)disregard\s+guardrails"),
+    re.compile(r"(?i)forget\s+everything\s+above"),
 ]
 
 _TAG_PATTERN = re.compile(r"<[^>]+>")
@@ -61,6 +62,7 @@ _DANGEROUS_CODE_PATTERNS = [
     re.compile(r"__import__\s*\("),
     re.compile(r"open\s*\([^)]+['\"]w['\"]"),
     re.compile(r"pty\.spawn\s*\("),
+    re.compile(r"urllib\.request\.(urlopen|urlretrieve|Request)\s*\("),
 ]
 
 # ─── Exceptions ────────────────────────────────────────────────────────────────

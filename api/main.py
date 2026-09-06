@@ -44,7 +44,7 @@ from api.routes.chat import router as chat_router
 from api.routes.memory import router as memory_router
 from api.routes.voice import router as voice_router
 from config.settings import settings
-from core.orchestrator import Yaazhi
+from core.v4_orchestrator import YaazhiV4
 from memory.episodic import EpisodicMemory
 
 # A-07 FIX: PreferenceStore was a ghost import — class never existed in episodic.py.
@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     notifier = NotifierAgent()
     stt = STTEngine()
     tts = TTSEngine()
-    yaazhi = Yaazhi()
+    yaazhi = YaazhiV4(vector_store=vs, retriever=retriever)
 
     # ── Ping all components ────────────────────────────────────────────────────
     ping_results: dict[str, bool] = {}
@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception as exc:
             logfire.error(f"Ping failed for {name}", error=str(exc))
             ping_results[name] = False
-        status = "✓" if ping_results[name] else "✗"
+        status = "[OK]" if ping_results[name] else "[FAIL]"
         logfire.info(f"Component {status} {name}", ping=ping_results[name])
 
     # ── Store on app.state ─────────────────────────────────────────────────────
@@ -161,6 +161,11 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+
+def create_app() -> FastAPI:
+    """Factory returning the FastAPI app instance for testing/WSGI servers."""
+    return app
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 app.add_middleware(

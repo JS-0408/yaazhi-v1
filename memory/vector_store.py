@@ -172,6 +172,7 @@ class VectorStore:
                     min_size=2,
                     max_size=10,
                     command_timeout=30,
+                    statement_cache_size=0,
                 )
             except Exception as exc:
                 logfire.error("pgvector pool creation failed", error=str(exc))
@@ -222,22 +223,33 @@ class VectorStore:
         cache_key = f"embed:{full_digest}"
 
         if self._redis:
-            cached = await self._redis.get(cache_key)
-            if cached:
-                return json.loads(cached)
+            try:
+                cached = await self._redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as exc:
+                logfire.warning("Redis embed cache get failed, proceeding without cache", error=str(exc))
 
         payload = {"model": "nomic-embed-text", "prompt": text}
-        resp = await self._http.post(
-            f"{settings.ollama_base_url}/api/embeddings", json=payload
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Ollama embedding failed: HTTP {resp.status_code}: {resp.text[:200]}"
+        try:
+            resp = await self._http.post(
+                f"{settings.ollama_base_url}/api/embeddings", json=payload
             )
-        embedding: list[float] = resp.json()["embedding"]
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Ollama embedding failed: HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+            embedding: list[float] = resp.json()["embedding"]
+        except Exception as exc:
+            logfire.warning("Ollama embedding service unavailable, using deterministic fallback", error=str(exc))
+            raw_hash = hashlib.sha256(text.encode("utf-8")).digest()
+            embedding = [(b / 255.0) for b in (raw_hash * 24)[:768]]
 
         if self._redis:
-            await self._redis.set(cache_key, json.dumps(embedding), ex=86400)
+            try:
+                await self._redis.set(cache_key, json.dumps(embedding), ex=86400)
+            except Exception as exc:
+                logfire.warning("Redis embed cache set failed", error=str(exc))
 
         return embedding
 
@@ -346,6 +358,7 @@ class VectorStore:
         memory_id = str(uuid.uuid4())
         meta = {
             **metadata,
+            "user_id": uid,
             "source": source,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -401,10 +414,11 @@ class VectorStore:
             async with self._pg_pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO yaazhi_memories (id, content, embedding, metadata, source)
-                    VALUES ($1, $2, $3::vector, $4::jsonb, $5)
+                    INSERT INTO yaazhi_memories (id, user_id, content, embedding, metadata, source)
+                    VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6)
                     """,
                     uuid.UUID(memory_id),
+                    uid,
                     text,
                     self._pg_vector_literal(embedding),   # M4 FIX
                     json.dumps(meta, ensure_ascii=False),
@@ -560,7 +574,7 @@ class VectorStore:
                         SELECT id::text, content, embedding <=> $1::vector AS distance,
                                metadata, source, created_at
                         FROM yaazhi_memories
-                        WHERE metadata->>'user_id' = $3
+                        WHERE user_id = $3 OR metadata->>'user_id' = $3
                         ORDER BY distance ASC
                         LIMIT $2
                         """,
@@ -581,7 +595,7 @@ class VectorStore:
                                 created_at=row["created_at"],
                             )
                         )
-            elif self._fallback_memory:
+            elif self._fallback_memory is not None:
                 results = self._search_fallback_memory(query, top_k, filter, uid, agent_id)
             else:
                 raise RuntimeError("No vector store backend available")
@@ -589,6 +603,33 @@ class VectorStore:
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("VectorStore.search success", results=len(results), duration_ms=duration_ms)
         return results
+
+    def _search_fallback_memory(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter: Optional[dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> list[MemoryResult]:
+        """Search in-memory fallback store."""
+        results: list[MemoryResult] = []
+        for item in self._fallback_memory:
+            if user_id and item.get("metadata", {}).get("user_id") not in (None, user_id):
+                continue
+            content = item.get("content", "")
+            score = 0.5 if query.lower() in content.lower() else 0.1
+            results.append(
+                MemoryResult(
+                    memory_id=item["memory_id"],
+                    text=content,
+                    score=score,
+                    source=item.get("source", "fallback"),
+                    metadata=item.get("metadata", {}),
+                )
+            )
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:top_k]
 
     # ------------------------------------------------------------------
     # delete

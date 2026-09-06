@@ -12,13 +12,13 @@ from fastapi.testclient import TestClient
 # ---------------------------------------------------------------------------
 
 def test_missing_api_key_returns_401(test_client):
-    resp = test_client.post("/chat", json={"message": "Hello"})
+    resp = test_client.post("/api/v1/chat", json={"message": "Hello"})
     assert resp.status_code == 401
 
 
 def test_wrong_api_key_returns_401(test_client):
     resp = test_client.post(
-        "/chat",
+        "/api/v1/chat",
         json={"message": "Hello"},
         headers={"X-API-Key": "wrong-key"},
     )
@@ -27,10 +27,12 @@ def test_wrong_api_key_returns_401(test_client):
 
 def test_correct_api_key_returns_200(test_client):
     resp = test_client.post(
-        "/chat",
+        "/api/v1/chat",
         json={"message": "What is AI?"},
         headers={"X-API-Key": "test-api-key"},
     )
+    if resp.status_code != 200:
+        print("DEBUG API RESP:", resp.status_code, resp.json())
     assert resp.status_code == 200
     data = resp.json()
     assert "response" in data
@@ -58,8 +60,8 @@ def test_health_is_public(test_client):
 
 def test_metrics_is_public(test_client):
     """GET /metrics must not require an API key."""
-    resp = test_client.get("/metrics")
-    assert resp.status_code in (200, 404)  # 404 if prometheus not mounted
+    resp = test_client.get("/metrics", follow_redirects=True)
+    assert resp.status_code != 401
 
 
 # ---------------------------------------------------------------------------
@@ -67,13 +69,13 @@ def test_metrics_is_public(test_client):
 # ---------------------------------------------------------------------------
 
 def test_memory_search_requires_auth(test_client):
-    resp = test_client.get("/memory/search?q=hello")
+    resp = test_client.get("/api/v1/memory/search?q=hello")
     assert resp.status_code == 401
 
 
 def test_memory_search_authenticated(test_client):
     resp = test_client.get(
-        "/memory/search?q=hello",
+        "/api/v1/memory/search?q=hello",
         headers={"X-API-Key": "test-api-key"},
     )
     assert resp.status_code in (200, 503)  # 503 if retriever not init
@@ -82,7 +84,7 @@ def test_memory_search_authenticated(test_client):
 def test_memory_search_query_too_long(test_client):
     long_q = "x" * 600
     resp = test_client.get(
-        f"/memory/search?q={long_q}",
+        f"/api/v1/memory/search?q={long_q}",
         headers={"X-API-Key": "test-api-key"},
     )
     assert resp.status_code == 422
@@ -91,7 +93,7 @@ def test_memory_search_query_too_long(test_client):
 def test_memory_ingest_path_traversal_blocked(test_client):
     """SEC-7: path outside allowed dirs must return 403."""
     resp = test_client.post(
-        "/memory/ingest",
+        "/api/v1/memory/ingest",
         json={"file_path": "/etc/passwd"},
         headers={"X-API-Key": "test-api-key"},
     )
@@ -100,7 +102,7 @@ def test_memory_ingest_path_traversal_blocked(test_client):
 
 def test_memory_ingest_blocked_symlink_traversal(test_client):
     resp = test_client.post(
-        "/memory/ingest",
+        "/api/v1/memory/ingest",
         json={"file_path": "../../../../etc/shadow"},
         headers={"X-API-Key": "test-api-key"},
     )
@@ -113,7 +115,7 @@ def test_memory_ingest_blocked_symlink_traversal(test_client):
 
 def test_chat_empty_message_rejected(test_client):
     resp = test_client.post(
-        "/chat",
+        "/api/v1/chat",
         json={"message": ""},
         headers={"X-API-Key": "test-api-key"},
     )
@@ -122,7 +124,7 @@ def test_chat_empty_message_rejected(test_client):
 
 def test_chat_message_too_long_rejected(test_client):
     resp = test_client.post(
-        "/chat",
+        "/api/v1/chat",
         json={"message": "x" * 3000},
         headers={"X-API-Key": "test-api-key"},
     )

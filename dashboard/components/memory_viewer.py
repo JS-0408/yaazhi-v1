@@ -143,10 +143,10 @@ def _render_memory_card(memory: dict, index: int) -> None:
 
     # Build header label
     preview = content[:80] + "…" if len(content) > 80 else content
-    header  = f"{_badge(category, cat_color)}&nbsp; {preview}"
+    header  = f"{category} · {preview}"
 
-    with st.expander(label="", expanded=False):
-        # Re-render badge inside expander since label doesn't support HTML
+    with st.expander(label=header, expanded=False):
+        # Re-render badge inside expander
         st.markdown(
             f"{_badge(category, cat_color)}&nbsp;&nbsp;"
             + (f"**Score:** `{score:.3f}`" if score is not None else ""),
@@ -219,8 +219,9 @@ def _delete_memory(mem_id: str) -> None:
         st.toast(f"[Demo] Would delete memory {mem_id}", icon="🗑")
         return
     try:
+        import asyncio
         vs = VectorStore()
-        vs.delete(mem_id)
+        asyncio.run(vs.delete(mem_id))
         st.toast("Memory deleted.", icon="✅")
         st.rerun()
     except Exception as exc:

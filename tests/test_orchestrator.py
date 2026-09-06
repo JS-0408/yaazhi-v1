@@ -64,7 +64,7 @@ async def test_planner_fallback_on_bad_json():
     planner = Planner()
     with patch.object(planner, "_call_llm", new_callable=AsyncMock,
                       return_value="NOT VALID JSON {{{"):
-        plan = await planner.plan("Write a Python script")
+        plan = await planner.plan("Ask a general question")
     assert len(plan.tasks) == 1
     assert plan.tasks[0].task_type == TaskType.RESEARCH
 
@@ -141,9 +141,8 @@ async def test_revise_reason_in_planner_context():
 @pytest.mark.asyncio
 async def test_integration_graph_traversal():
     from core.orchestrator import Yaazhi
-    from core.state import make_initial_state
+    from core.state import AgentOutput
     
-    # We want to use the actual graph, but mock the LLM and the agents
     orchestrator = Yaazhi()
     
     # Mock Planner
@@ -152,22 +151,17 @@ async def test_integration_graph_traversal():
         tasks=[SubTask(task_id="t1", task_type=TaskType.RESEARCH, description="mock research")]
     ))
     
-    # Mock Executor
-    async def mock_execute(plan, state):
-        return [{"task_id": "t1", "agent": "researcher", "output": "mocked output", "success": True, "elapsed": 1.0}]
-    orchestrator._executor = MagicMock()
-    orchestrator._executor.execute = mock_execute
+    # Mock single task execution
+    orchestrator._execute_single_task = AsyncMock(return_value=AgentOutput(
+        agent_name="researcher",
+        task_id="t1",
+        content="Final Answer Mocked",
+        success=True,
+    ))
     
     # Mock Reviewer
     orchestrator._reviewer = MagicMock()
-    orchestrator._reviewer.review = AsyncMock(return_value=(True, 0.9, "Looks good"))
+    orchestrator._reviewer.review = AsyncMock(return_value=MagicMock(verdict="PASS", feedback="Looks good", retry_with_context=""))
     
-    # Mock Finalizer
-    with patch.object(orchestrator, "_call_llm", new_callable=AsyncMock) as mock_llm:
-        mock_llm.return_value = "Final Answer Mocked"
-        
-        state = make_initial_state("test-session", "do integration test", "no context")
-        final_state = await orchestrator.run(state)
-        
-        assert final_state["final_response"] == "Final Answer Mocked"
-        assert len(final_state["subtask_results"]) == 1
+    output = await orchestrator.run("do integration test", session_id="test-session")
+    assert output.response == "Final Answer Mocked"

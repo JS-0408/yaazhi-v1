@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, TypedDict
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ class SubTask(BaseModel):
     task_type: TaskType
     description: str = Field(..., min_length=1, max_length=1000)
     priority: int = Field(default=5, ge=1, le=10)
-    dependencies: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list, validation_alias=AliasChoices("dependencies", "depends_on"))
     estimated_duration_seconds: int = Field(default=30, ge=1)
     requires_human_approval: bool = Field(default=False)
 
@@ -100,7 +100,7 @@ class TaskPlan(BaseModel):
     """
 
     plan_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    tasks: list[SubTask] = Field(..., min_length=1, max_length=7)
+    tasks: list[SubTask] = Field(..., min_length=1, max_length=10)
     estimated_total_duration_seconds: int = Field(default=60, ge=1)
     strategy: str = Field(default="parallel")
     requires_human_approval: bool = Field(default=False)
@@ -110,8 +110,8 @@ class TaskPlan(BaseModel):
     @classmethod
     def validate_tasks(cls, v: list[SubTask]) -> list[SubTask]:
         """Ensure task count is within allowed range."""
-        if len(v) > 7:
-            raise ValueError("TaskPlan cannot have more than 7 subtasks")
+        if len(v) > 10:
+            raise ValueError("TaskPlan cannot have more than 10 subtasks")
         return v
 
     def __repr__(self) -> str:
@@ -245,6 +245,7 @@ class YaazhiOutput(BaseModel):
     model_used: str = Field(default="")
     detected_language: str = Field(default="en")
     memories_used: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     def __repr__(self) -> str:
         """Return concise string representation."""

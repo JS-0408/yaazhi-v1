@@ -35,6 +35,62 @@ class TestResearcherAgent:
         with pytest.raises(Exception):
             await ResearcherAgent().run("")
 
+    def test_cache_key_full_sha256(self):
+        from agents.researcher import ResearcherAgent
+        agent = ResearcherAgent()
+        key = agent._cache_key("test query")
+        assert key.startswith("yaazhi:research:")
+        # Full 64-char SHA256 digest
+        assert len(key.split(":")[-1]) == 64
+
+    @pytest.mark.asyncio
+    async def test_deep_fetch_ssrf_blocked(self):
+        from agents.researcher import ResearcherAgent
+        agent = ResearcherAgent()
+        res = await agent.deep_fetch("http://169.254.169.254/latest/meta-data/")
+        assert "blocked by SSRF filter" in res.lower() or "ssrf" in res.lower()
+
+
+# ─────────────────────────────────────────────────────────
+# SSRF & Browser Agent
+# ─────────────────────────────────────────────────────────
+
+class TestBrowserAgentAndSSRF:
+
+    def test_validate_url_blocks_private_ips(self):
+        from agents.browser import validate_url
+        blocked_urls = [
+            "http://127.0.0.1:8000/admin",
+            "http://localhost:5000",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/internal",
+            "http://192.168.1.1/router",
+        ]
+        for url in blocked_urls:
+            valid, reason = validate_url(url)
+            assert valid is False
+            assert "blocked" in reason.lower() or "private" in reason.lower() or "loopback" in reason.lower()
+
+    def test_validate_url_blocks_invalid_schemes(self):
+        from agents.browser import validate_url
+        valid, reason = validate_url("file:///etc/passwd")
+        assert valid is False
+        assert "scheme" in reason.lower()
+
+    def test_validate_url_allows_public_urls(self):
+        from agents.browser import validate_url
+        valid, reason = validate_url("https://python.org")
+        assert valid is True
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_browser_agent_close_idempotent(self):
+        from agents.browser import BrowserAgent
+        agent = BrowserAgent()
+        await agent.close()
+        await agent.close()  # Must not crash
+        assert agent._closed is True
+
 
 # ─────────────────────────────────────────────────────────
 # Coder agent
@@ -58,10 +114,47 @@ class TestCoderAgent:
     def test_dangerous_code_blocked(self):
         from agents.coder import CoderAgent
         from core.guardrails import GuardrailViolation
-        # Our updated sandbox returns a CodeResult with success=False and an error string.
-        # Wait, the codebase test expects raises. The updated validate_code_for_execution raises GuardrailViolation.
         with pytest.raises((PermissionError, ValueError, RuntimeError, GuardrailViolation)):
             CoderAgent().execute_safe("import os; os.system('rm -rf /')")
+
+    def test_validate_syntax_valid(self):
+        from agents.coder import CoderAgent
+        ok, err = CoderAgent.validate_syntax("x = [i for i in range(10)]")
+        assert ok is True
+        assert err == ""
+
+    def test_validate_syntax_invalid(self):
+        from agents.coder import CoderAgent
+        ok, err = CoderAgent.validate_syntax("def broken_func(")
+        assert ok is False
+        assert "SyntaxError" in err
+
+    @pytest.mark.asyncio
+    async def test_code_over_500_lines_rejected(self):
+        from agents.coder import CoderAgent
+        long_code = "\n".join(["x = 1"] * 505)
+        agent = CoderAgent()
+        result = await agent.execute_code(long_code)
+        assert result.success is False
+        assert "500-line limit" in result.stderr
+
+    @pytest.mark.asyncio
+    async def test_dangerous_pattern_eval_exec_blocked(self):
+        from agents.coder import CoderAgent
+        agent = CoderAgent()
+        result = await agent.execute_code("eval('2 + 2')")
+        assert result.success is False
+        assert any(k in result.stderr.lower() for k in ["banned", "unsafe", "blocked", "isolated"])
+
+    @pytest.mark.asyncio
+    @patch("litellm.acompletion")
+    async def test_write_code_strips_markdown_fences(self, mock_acompletion):
+        mock_acompletion.return_value.choices = [
+            MagicMock(message=MagicMock(content="```python\ndef add(a, b):\n    return a + b\n```"))
+        ]
+        from agents.coder import CoderAgent
+        code = await CoderAgent().write_code("Write add function")
+        assert code == "def add(a, b):\n    return a + b"
 
 
 # ─────────────────────────────────────────────────────────
@@ -134,5 +227,5 @@ class TestOrchestrator:
         result = await Yaazhi().run(
             user_input="Explain pgvector.", session_id="test"
         )
-        assert isinstance(result, dict)
-        assert "response" in result
+        assert result is not None
+        assert hasattr(result, "response") or (isinstance(result, dict) and "response" in result)

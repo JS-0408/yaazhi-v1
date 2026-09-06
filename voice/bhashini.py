@@ -144,15 +144,20 @@ class BhashiniClient:
         return pipeline_config
 
     async def translate(
-        self, text: str, source_lang: str, target_lang: str
+        self,
+        text: str,
+        source_lang: str = "en",
+        target_lang: str = "te",
+        source_language: Optional[str] = None,
+        target_language: Optional[str] = None,
     ) -> str:
         """
         Translate text between two languages using Bhashini.
 
         Args:
             text: Source text to translate.
-            source_lang: ISO source language code (e.g. 'en').
-            target_lang: ISO target language code (e.g. 'te').
+            source_lang / source_language: ISO source language code (e.g. 'en').
+            target_lang / target_language: ISO target language code (e.g. 'te').
 
         Returns:
             Translated text string.
@@ -160,14 +165,16 @@ class BhashiniClient:
         Raises:
             RuntimeError: On pipeline fetch or inference failure.
         """
+        src = source_language or source_lang
+        tgt = target_language or target_lang
         logfire.debug(
             "BhashiniClient.translate",
-            src=source_lang,
-            tgt=target_lang,
+            src=src,
+            tgt=tgt,
             chars=len(text),
         )
         t_start = time.time()
-        pipeline = await self._get_pipeline(source_lang, "translation", target_lang)
+        pipeline = await self._get_pipeline(src, "translation", tgt)
         inference_url = (
             pipeline.get("pipelineInferenceAPIEndPoint", {})
             .get("callbackUrl", "")
@@ -187,8 +194,8 @@ class BhashiniClient:
                             "taskType": "translation",
                             "config": {
                                 "language": {
-                                    "sourceLanguage": source_lang,
-                                    "targetLanguage": target_lang,
+                                    "sourceLanguage": src,
+                                    "targetLanguage": tgt,
                                 },
                                 "serviceId": pipeline.get("pipelineResponseConfig", [{}])[0]
                                 .get("config", [{}])[0]
@@ -215,8 +222,8 @@ class BhashiniClient:
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info(
             "BhashiniClient.translate success",
-            src=source_lang,
-            tgt=target_lang,
+            src=src,
+            tgt=tgt,
             duration_ms=duration_ms,
         )
         return translated
@@ -373,6 +380,9 @@ class BhashiniClient:
             duration_ms=duration_ms,
         )
         return transcript
+
+    # Alias for backward compatibility
+    asr = stt
 
     async def detect_language(self, text: str) -> str:
         """

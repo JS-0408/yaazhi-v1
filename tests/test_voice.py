@@ -125,7 +125,7 @@ class TestTTSEngine:
 
         from voice.tts import TTSEngine
         engine = TTSEngine()
-        res = await engine.speak("Hello from Yaazhi!", language="en")
+        res = await engine.speak("Hello from Yaazhi!", language="te")
         assert isinstance(res, (bytes, bytearray))
 
     @pytest.mark.asyncio
@@ -160,17 +160,18 @@ class TestTTSEngine:
 class TestBhashiniClient:
 
     @pytest.mark.asyncio
-    @patch("voice.bhashini.httpx")
-    async def test_translate_returns_string(self, mock_httpx):
+    @patch("httpx.AsyncClient.post")
+    async def test_translate_returns_string(self, mock_post):
         """translate() should return a translated string."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {
             "pipelineResponse": [{
                 "output": [{"target": "హలో, నేను యాజి"}]
             }]
         }
-        mock_httpx.post.return_value = mock_resp
+        mock_post.return_value = mock_resp
 
         from voice.bhashini import BhashiniClient
         client = BhashiniClient()
@@ -183,17 +184,18 @@ class TestBhashiniClient:
         assert len(res) > 0
 
     @pytest.mark.asyncio
-    @patch("voice.bhashini.httpx")
-    async def test_asr_returns_transcript(self, mock_httpx, sample_wav_bytes):
+    @patch("httpx.AsyncClient.post")
+    async def test_asr_returns_transcript(self, mock_post, sample_wav_bytes):
         """asr() should return a transcript string from audio bytes."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {
             "pipelineResponse": [{
                 "output": [{"source": "నమస్కారం"}]
             }]
         }
-        mock_httpx.post.return_value = mock_resp
+        mock_post.return_value = mock_resp
 
         from voice.bhashini import BhashiniClient
         client = BhashiniClient()
@@ -202,18 +204,19 @@ class TestBhashiniClient:
         assert isinstance(res, str)
 
     @pytest.mark.asyncio
-    @patch("voice.bhashini.httpx")
-    async def test_tts_returns_bytes(self, mock_httpx):
+    @patch("httpx.AsyncClient.post")
+    async def test_tts_returns_bytes(self, mock_post):
         """tts() should return audio bytes."""
         import base64
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {
             "pipelineResponse": [{
                 "audio": [{"audioContent": base64.b64encode(b"fake_audio").decode()}]
             }]
         }
-        mock_httpx.post.return_value = mock_resp
+        mock_post.return_value = mock_resp
 
         from voice.bhashini import BhashiniClient
         client = BhashiniClient()
@@ -223,13 +226,14 @@ class TestBhashiniClient:
         assert len(res) > 0
 
     @pytest.mark.asyncio
-    @patch("voice.bhashini.httpx")
-    async def test_api_error_raises(self, mock_httpx):
+    @patch("httpx.AsyncClient.post")
+    async def test_api_error_raises(self, mock_post):
         """BhashiniClient should raise RuntimeError on non-200 response."""
+        import httpx
         mock_resp = MagicMock()
         mock_resp.status_code = 503
-        mock_resp.text = "Service Unavailable"
-        mock_httpx.post.return_value = mock_resp
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError("Service Unavailable", request=MagicMock(), response=mock_resp)
+        mock_post.return_value = mock_resp
 
         from voice.bhashini import BhashiniClient
         client = BhashiniClient()
@@ -238,10 +242,10 @@ class TestBhashiniClient:
             await client.translate("Hello", "en", "te")
 
     @pytest.mark.asyncio
-    @patch("voice.bhashini.httpx")
-    async def test_ping_returns_bool(self, mock_httpx):
+    @patch("httpx.AsyncClient.get")
+    async def test_ping_returns_bool(self, mock_get):
         """ping() should return a bool regardless of API state."""
-        mock_httpx.get.return_value = MagicMock(status_code=200)
+        mock_get.return_value = MagicMock(status_code=200)
         from voice.bhashini import BhashiniClient
         client = BhashiniClient()
         res = await client.ping()
