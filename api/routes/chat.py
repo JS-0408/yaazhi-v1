@@ -19,11 +19,20 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from config.settings import settings
 from core.state import YaazhiOutput
+from core.context import get_user_id
 from memory.episodic import EpisodicMemory
 from memory.retriever import SemanticRetriever
 
 router = APIRouter(tags=["chat"])
+
+
+def _current_user_id() -> str:
+    try:
+        return get_user_id()
+    except Exception:
+        return settings.default_user_id
 
 
 # ---------------------------------------------------------------------------
@@ -57,19 +66,13 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _sse_generator(text: str) -> AsyncGenerator[bytes, None]:
-    """Yield SSE-formatted byte chunks for streaming (word-level, 5 words/chunk)."""
-    words = text.split(" ")
-    buffer: list[str] = []
-    for word in words:
-        buffer.append(word)
-        if len(buffer) >= 5:
-            chunk = " ".join(buffer) + " "
-            yield f"data: {chunk}\n\n".encode("utf-8")
-            buffer = []
-            await asyncio.sleep(0.02)
-    if buffer:
-        yield f"data: {' '.join(buffer)}\n\n".encode("utf-8")
-    yield b"data: [DONE]\n\n"
+    """Yield SSE-formatted chunks preserving multiline content."""
+    for block in text.split("\n\n"):
+        payload_lines = block.splitlines() or [""]
+        event = "".join(f"data: {line}\n" for line in payload_lines) + "\n"
+        yield event.encode("utf-8")
+        await asyncio.sleep(0.02)
+    yield b"event: done\ndata: [DONE]\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +107,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
 
     # ── Store user message in episodic memory (before orchestrator) ───────────
     try:
-        await episodic.add_message(body.session_id, "user", body.message)
+        await episodic.add_message(body.session_id, "user", body.message, user_id=_current_user_id())
     except Exception as exc:
         logfire.warning("Episodic: failed to store user message", error=str(exc))
 
@@ -121,7 +124,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
 
     # ── Store assistant response in episodic memory ───────────────────────────
     try:
-        await episodic.add_message(body.session_id, "assistant", output.response)
+        await episodic.add_message(body.session_id, "assistant", output.response, user_id=_current_user_id())
     except Exception as exc:
         logfire.warning("Episodic: failed to store assistant response", error=str(exc))
 
@@ -170,9 +173,10 @@ async def list_sessions(request: Request) -> list[dict]:
     results: list[dict] = []
     cursor = 0
     while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
+        uid = _current_user_id()
+        cursor, keys = await r.scan(cursor, match=f"user:{uid}:session:*:messages", count=100)
         for key in keys:
-            session_id = key.split(":")[1]
+            session_id = key.split(":")[3]
             count = await r.llen(key)
             results.append({"session_id": session_id, "message_count": count})
         if cursor == 0:
@@ -186,7 +190,7 @@ async def delete_session(request: Request, session_id: str) -> dict:
     logfire.debug("DELETE /sessions/{session_id}", session_id=session_id[:8])
     state = request.app.state
     episodic: EpisodicMemory = state.episodic
-    await episodic.clear_session(session_id)
+    await episodic.clear_session(session_id, user_id=_current_user_id())
     logfire.info("Session cleared", session_id=session_id[:8])
     return {"deleted": True}
 
@@ -199,4 +203,4 @@ async def get_session_history(
     logfire.debug("GET /sessions/{session_id}/history", session_id=session_id[:8])
     state = request.app.state
     episodic: EpisodicMemory = state.episodic
-    return await episodic.get_history(session_id, last_n=last_n)
+    return await episodic.get_history(session_id, last_n=last_n, user_id=_current_user_id())

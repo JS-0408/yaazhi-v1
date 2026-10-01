@@ -25,6 +25,7 @@ import logfire
 from agents.reflection_v4 import reflection_pipeline
 from config.settings import settings
 from core.context_assembler import context_assembler
+from core.guardrails import validate_user_input
 from core.orchestrator import Yaazhi
 from core.router import CognitiveRouter, Domain, KalamEpoch, RouteDecision
 from core.state import SubTask, YaazhiOutput, YaazhiState, make_initial_state
@@ -57,6 +58,7 @@ class YaazhiV4(Yaazhi):
         super().__init__()
         self.router = CognitiveRouter()
         self.uriporul_sm = uriporul_sm
+        self._reflection_tasks: set[asyncio.Task] = set()
         vs = vector_store or getattr(self, "memory", None)
         self.v4_retriever = retriever or SemanticRetriever(vs)
         self.v4_retriever.attach()
@@ -90,6 +92,8 @@ class YaazhiV4(Yaazhi):
         """
         start_time = time.perf_counter()
         session_id = session_id or str(uuid.uuid4())
+        validated = validate_user_input(user_input)
+        user_input = validated.sanitized_text
 
         # ── Step 1: Mutarporuḷ Extraction ────────────────────────────
         route = self.router.classify(user_input, kalam_epoch=kalam_epoch)
@@ -111,7 +115,11 @@ class YaazhiV4(Yaazhi):
         else:
             # Puram: retrieve vector context restricted to this Tiṇai
             try:
-                raw_results = await self.v4_retriever.retrieve(user_input, top_k=8)
+                raw_results = await self.v4_retriever.retrieve(
+                    user_input,
+                    top_k=8,
+                    filters={"tinai": str(route.tinai)},
+                )
                 vector_dicts = [
                     {
                         "content":    r.text,
@@ -175,7 +183,7 @@ class YaazhiV4(Yaazhi):
 
         # ── Step 5: Async Reflection (fire-and-forget) ────────────────
         session_outputs = final_state.get("agent_outputs", {})
-        asyncio.create_task(
+        task = asyncio.create_task(
             reflection_pipeline.run(
                 session_outputs = session_outputs,
                 tinai           = route.tinai,
@@ -184,6 +192,8 @@ class YaazhiV4(Yaazhi):
                 session_id      = session_id,
             )
         )
+        self._reflection_tasks.add(task)
+        task.add_done_callback(self._on_reflection_done)
         logfire.info("V4.run: Step5 reflection task queued")
 
         # ── Final output assembly ─────────────────────────────────────
@@ -210,3 +220,11 @@ class YaazhiV4(Yaazhi):
             detected_language="en",
             memories_used=0,
         )
+
+    def _on_reflection_done(self, task: asyncio.Task) -> None:
+        self._reflection_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logfire.error("V4 reflection task failed", error=str(exc))

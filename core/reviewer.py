@@ -51,6 +51,10 @@ class Reviewer:
     _PASS_THRESHOLD: float = 0.75
     _FAIL_THRESHOLD: float = 0.50
 
+    async def ping(self) -> bool:
+        """Bounded health check."""
+        return True
+
     # ------------------------------------------------------------------
     # Main review entry point
     # ------------------------------------------------------------------

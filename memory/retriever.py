@@ -16,9 +16,13 @@ from typing import Optional, TYPE_CHECKING
 
 import logfire
 import redis.asyncio as aioredis
-import tiktoken
+try:
+    import tiktoken
+except Exception:  # pragma: no cover
+    tiktoken = None
 
 from config.settings import settings
+from core.context import get_user_id
 from core.state import MemoryResult
 
 if TYPE_CHECKING:
@@ -44,7 +48,7 @@ class SemanticRetriever:
             vector_store = VectorStore()
         self._vs = vector_store
         self._redis: Optional[aioredis.Redis] = None
-        self._tokenizer = tiktoken.get_encoding("cl100k_base")
+        self._tokenizer = None
         self._retrieval_ttl: int = 300  # 5 minutes
 
     def __repr__(self) -> str:
@@ -72,7 +76,13 @@ class SemanticRetriever:
     # retrieve — cached semantic search
     # ------------------------------------------------------------------
 
-    async def retrieve(self, query: str, top_k: int = 5) -> list[MemoryResult]:
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: Optional[str] = None,
+        filters: Optional[dict] = None,
+    ) -> list[MemoryResult]:
         """
         Retrieve semantically similar memories with Redis caching.
 
@@ -82,8 +92,14 @@ class SemanticRetriever:
         t_start = time.time()
         await self._ensure_redis()
 
+        if user_id is None:
+            try:
+                user_id = get_user_id()
+            except Exception:
+                user_id = settings.default_user_id
         digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:32]
-        cache_key = f"retrieval:{digest}:{top_k}"
+        filters_key = json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
+        cache_key = f"retrieval:{user_id}:{digest}:{top_k}:{filters_key}"
         cached_raw = await self._redis.get(cache_key)
         if cached_raw:
             try:
@@ -94,7 +110,7 @@ class SemanticRetriever:
             except Exception:
                 pass  # corrupt cache — fall through to live search
 
-        results = await self._vs.search(query, top_k=top_k)
+        results = await self._vs.search(query, top_k=top_k, user_id=user_id, filter=filters or {})
 
         try:
             serializable = [r.model_dump(mode="json") for r in results]
@@ -203,10 +219,19 @@ class SemanticRetriever:
             lines.append(f"{i}. [{mem.source}]: {mem.text}")
 
         context = "\n".join(lines)
-        tokens = await asyncio.to_thread(self._tokenizer.encode, context)
-        if len(tokens) > max_tokens:
-            trimmed = await asyncio.to_thread(self._tokenizer.decode, tokens[:max_tokens])
-            context = trimmed
+        if self._tokenizer is None and tiktoken is not None:
+            try:
+                self._tokenizer = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                self._tokenizer = None
+
+        if self._tokenizer is not None:
+            tokens = await asyncio.to_thread(self._tokenizer.encode, context)
+            if len(tokens) > max_tokens:
+                trimmed = await asyncio.to_thread(self._tokenizer.decode, tokens[:max_tokens])
+                context = trimmed
+        elif len(context) > max_tokens * 4:
+            context = context[: max_tokens * 4]
 
         logfire.info(
             "SemanticRetriever.build_context success",
@@ -232,6 +257,22 @@ class SemanticRetriever:
             await self._redis.zadd(_MEMORY_INDEX_KEY, {memory_id: score})
         except Exception as exc:
             logfire.warning("SemanticRetriever.index_memory failed", error=str(exc))
+
+    async def invalidate_user_cache(self, user_id: Optional[str] = None) -> None:
+        await self._ensure_redis()
+        if user_id is None:
+            try:
+                user_id = get_user_id()
+            except Exception:
+                user_id = settings.default_user_id
+        cursor = 0
+        pattern = f"retrieval:{user_id}:*"
+        while True:
+            cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=200)
+            if keys:
+                await self._redis.delete(*keys)
+            if cursor == 0:
+                break
 
     # ------------------------------------------------------------------
     # hybrid_search — M5 fix: bounded SCAN + sorted-set index

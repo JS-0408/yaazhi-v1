@@ -27,7 +27,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import logfire
-import tiktoken
+try:
+    import tiktoken
+except Exception:  # pragma: no cover
+    tiktoken = None
 
 from core.router import RouteDecision, TinaiCategory
 from memory.graph_store import graph_store
@@ -83,7 +86,7 @@ class ContextAssembler:
         self._w3 = w3
         self._lambda = lambda_decay
         self._max_tokens = max_tokens
-        self._tokenizer = tiktoken.get_encoding("cl100k_base")
+        self._tokenizer = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -252,13 +255,22 @@ class ContextAssembler:
         header = (
             f"[CONTEXT — Tiṇai: {route.tinai} | Kālam: {route.kalam_epoch}]\n"
         )
+        if self._tokenizer is None and tiktoken is not None:
+            try:
+                self._tokenizer = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                self._tokenizer = None
         lines: list[str] = [header]
-        used_tokens = len(self._tokenizer.encode(header))
+        used_tokens = len(header) // 4
+        if self._tokenizer is not None:
+            used_tokens = len(self._tokenizer.encode(header))
         reserved    = 10  # safety margin
 
         for i, cand in enumerate(candidates, start=1):
             line  = f"{i}. [{cand.source}] {cand.content}  (score: {cand.score:.3f})\n"
-            toks  = len(self._tokenizer.encode(line))
+            toks = len(line) // 4
+            if self._tokenizer is not None:
+                toks = len(self._tokenizer.encode(line))
             if used_tokens + toks + reserved > budget:
                 break
             lines.append(line)

@@ -36,6 +36,7 @@ from agents.browser import BrowserAgent
 from agents.notifier import NotifierAgent
 from api.middleware import (
     APIKeyMiddleware,
+    ContextExtractionMiddleware,
     RateLimitMiddleware,
     RequestLoggingMiddleware,
     TimingMiddleware,
@@ -179,6 +180,7 @@ app.add_middleware(
 # ── Custom middleware (applied in registration order — last is outermost) ──────
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(ContextExtractionMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(TimingMiddleware)
 

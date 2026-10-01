@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
 import time
 from pathlib import Path
@@ -371,3 +372,35 @@ class BrowserAgent:
         except Exception as exc:
             logfire.error("BrowserAgent.browse_and_summarise LLM failed", error=str(exc))
             return page_text[:3000]   # fall back to raw text
+
+    async def search_web(self, query: str) -> str:
+        """
+        Compatibility helper used by orchestrator BROWSE tasks.
+
+        If a URL is present in the query, navigate directly and return text.
+        Otherwise run a DuckDuckGo snippet search and return top results.
+        """
+        url_match = re.search(r"https?://\S+", query)
+        if url_match:
+            return await self.navigate(url_match.group(0))
+
+        try:
+            from duckduckgo_search import DDGS
+
+            results = await asyncio.to_thread(
+                lambda: list(DDGS().text(keywords=query, max_results=5))
+            )
+            lines: list[str] = []
+            for item in results[:3]:
+                title = item.get("title", "").strip()
+                body = (item.get("body") or item.get("snippet") or "").strip()
+                href = item.get("href", "").strip()
+                if href:
+                    safe, _ = validate_url(href)
+                    if not safe:
+                        continue
+                lines.append(f"{title}\n{body}\n{href}".strip())
+            return "\n\n".join(lines) or "No results found"
+        except Exception as exc:
+            logfire.warning("BrowserAgent.search_web failed", error=str(exc))
+            return "No results found"

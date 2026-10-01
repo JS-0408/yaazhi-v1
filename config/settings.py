@@ -154,6 +154,10 @@ class AppSettings(BaseSettings):
         """
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
+    @property
+    def trusted_proxy_ips_list(self) -> list[str]:
+        return [ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip()]
+
 
 # ─── Root Settings ────────────────────────────────────────────────────────────
 
@@ -247,6 +251,8 @@ class Settings(BaseSettings):
     default_user_id: str = Field(default="default", description="Default user namespace for memory ops")
     uploads_path: str = Field(default="/tmp/yaazhi_uploads", description="Directory for uploaded files")
     daily_budget_usd: float = Field(default=1.0, description="Daily LLM spend alert threshold in USD")
+    allow_test_fake_embeddings: bool = Field(default=False, description="Enable deterministic test-only embedding fallback")
+    trusted_proxy_ips: str = Field(default="127.0.0.1,::1", description="Comma-separated proxy IPs trusted for X-Forwarded-For")
     # chroma_persist_path duplicated from MemorySettings for backwards compat
     chroma_persist_path: str = Field(default="./chroma_data", description="[OPTIONAL] ChromaDB local persistence path")
 
