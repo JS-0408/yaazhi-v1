@@ -22,9 +22,17 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from config.settings import settings
+from core.context import get_user_id
 from memory.ingestion import IngestResult
 
 router = APIRouter(tags=["memory"])
+
+
+def _current_user_id() -> str:
+    try:
+        return get_user_id()
+    except Exception:
+        return settings.default_user_id
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +118,7 @@ async def search_memories(request: Request, q: str, top_k: int = 5) -> list[dict
         raise HTTPException(status_code=503, detail="Retriever not initialised")
 
     top_k = max(1, min(top_k, 20))   # clamp between 1 and 20
-    results = await state.retriever.retrieve(q, top_k=top_k)
+    results = await state.retriever.retrieve(q, top_k=top_k, user_id=_current_user_id())
     return [r.model_dump(mode="json") for r in results]
 
 
@@ -144,7 +152,7 @@ async def add_memory(request: Request, body: AddMemoryRequest) -> dict:
         body.text,
         metadata=metadata,
         source=body.source,
-        user_id=settings.default_user_id,
+        user_id=_current_user_id(),
     )
     logfire.info("Memory added manually", memory_id=memory_id)
     return {"memory_id": memory_id}
@@ -155,7 +163,7 @@ async def delete_memory(request: Request, memory_id: str) -> dict:
     """Delete a memory entry from the active vector store."""
     logfire.debug("DELETE /memory/{memory_id}", memory_id=memory_id)
     state = request.app.state
-    deleted = await state.vector_store.delete(memory_id)
+    deleted = await state.vector_store.delete(memory_id, user_id=_current_user_id())
     return {"deleted": deleted}
 
 
@@ -207,6 +215,7 @@ async def upload_and_ingest(
     """
     allowed_exts = {".pdf", ".docx", ".pptx"}
     filename = file.filename or "upload.pdf"
+    safe_name = Path(filename).name
     ext = Path(filename).suffix.lower()
 
     if ext not in allowed_exts:
@@ -218,7 +227,9 @@ async def upload_and_ingest(
     uploads_dir = Path(tempfile.gettempdir()) / "yaazhi_uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
-    dest = uploads_dir / filename
+    dest = (uploads_dir / f"{int(time.time())}_{safe_name}").resolve()
+    if dest.parent != uploads_dir.resolve():
+        raise HTTPException(status_code=400, detail="Invalid upload filename.")
     content = await file.read()
 
     # 50 MB size limit
@@ -226,7 +237,7 @@ async def upload_and_ingest(
         raise HTTPException(status_code=413, detail="File exceeds 50 MB limit.")
 
     dest.write_bytes(content)
-    logfire.info("POST /memory/upload: file saved", filename=filename, bytes=len(content))
+    logfire.info("POST /memory/upload: file saved", filename=safe_name, bytes=len(content))
 
     state = request.app.state
     ingester = state.ingester
@@ -252,9 +263,10 @@ async def list_all_sessions(request: Request) -> list[dict]:
     results: list[dict] = []
     cursor = 0
     while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
+        uid = _current_user_id()
+        cursor, keys = await r.scan(cursor, match=f"user:{uid}:session:*:messages", count=100)
         for key in keys:
-            session_id = key.split(":")[1]
+            session_id = key.split(":")[3]
             count = await r.llen(key)
             ttl = await r.ttl(key)
             now_ts = int(datetime.now(timezone.utc).timestamp())
@@ -285,13 +297,14 @@ async def consolidate_sessions(request: Request) -> dict:
     compressed = 0
     cursor = 0
     while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
+        uid = _current_user_id()
+        cursor, keys = await r.scan(cursor, match=f"user:{uid}:session:*:messages", count=100)
         for key in keys:
             count = await r.llen(key)
             if count > 50:
-                session_id = key.split(":")[1]
+                session_id = key.split(":")[3]
                 try:
-                    await episodic.summarize_session(session_id)
+                    await episodic.summarize_session(session_id, user_id=uid)
                     compressed += 1
                 except Exception as exc:
                     logfire.warning(

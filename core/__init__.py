@@ -1,30 +1,23 @@
 """
-Yaazhi Core Package
-====================
-Orchestration, planning, reviewing, state management, and guardrails.
+Yaazhi Core Package.
 
-Usage:
-    from core import Yaazhi, Planner, Reviewer
-    from core.state import YaazhiState, make_initial_state, TaskType
-    from core.guardrails import validate_user_input
+Keep package initialisation import-safe (no eager orchestrator import) to avoid
+circular imports when modules import `core.agent_registry`.
 """
 
-from core.orchestrator import Yaazhi
-from core.planner import Planner
-from core.reviewer import Reviewer
 from core.guardrails import validate_user_input
 from core.state import (
-    YaazhiState,
-    YaazhiInput,
-    YaazhiOutput,
-    TaskType,
-    ReviewVerdict,
+    AgentOutput,
     Language,
+    MemoryResult,
+    ReviewResult,
+    ReviewVerdict,
     SubTask,
     TaskPlan,
-    AgentOutput,
-    ReviewResult,
-    MemoryResult,
+    TaskType,
+    YaazhiInput,
+    YaazhiOutput,
+    YaazhiState,
     make_initial_state,
 )
 
@@ -46,3 +39,16 @@ __all__ = [
     "MemoryResult",
     "make_initial_state",
 ]
+
+
+def __getattr__(name: str):
+    if name == "Yaazhi":
+        from core.orchestrator import Yaazhi
+        return Yaazhi
+    if name == "Planner":
+        from core.planner import Planner
+        return Planner
+    if name == "Reviewer":
+        from core.reviewer import Reviewer
+        return Reviewer
+    raise AttributeError(name)

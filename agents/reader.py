@@ -13,6 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import urljoin
 
 import httpx
 import logfire
@@ -84,9 +85,32 @@ class ReaderAgent:
                         "Chrome/120.0.0.0 Safari/537.36"
                     )
                 },
-                follow_redirects=True,
+                follow_redirects=False,
             )
         return self._http_client
+
+    @staticmethod
+    def _validate_remote_url(url: str) -> None:
+        from agents.browser import validate_url
+
+        safe, reason = validate_url(url)
+        if not safe:
+            raise ValueError(f"URL blocked: {reason}")
+
+    async def _safe_get_with_redirects(self, url: str, max_hops: int = 5) -> httpx.Response:
+        client = await self._get_http_client()
+        current = url
+        for _ in range(max_hops):
+            self._validate_remote_url(current)
+            response = await client.get(current, timeout=25.0, follow_redirects=False)
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if not location:
+                    return response
+                current = urljoin(current, location)
+                continue
+            return response
+        raise ValueError("Too many redirects")
 
     def _validate_file_path(self, file_path: str) -> Path:
         """
@@ -308,9 +332,8 @@ class ReaderAgent:
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"Invalid URL (must start with http:// or https://): {url}")
 
-        client = await self._get_http_client()
         try:
-            response = await client.get(url, timeout=25.0)
+            response = await self._safe_get_with_redirects(url)
             response.raise_for_status()
         except httpx.TimeoutException:
             logfire.warning("URL fetch timeout", url=url[:60])

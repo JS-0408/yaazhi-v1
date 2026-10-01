@@ -121,6 +121,14 @@ class Planner:
             self._system_prompt = _build_system_prompt()
         return self._system_prompt
 
+    async def ping(self) -> bool:
+        """Bounded health check."""
+        try:
+            _ = self._get_system_prompt()
+            return True
+        except Exception:
+            return False
+
     async def plan(
         self,
         task: str,

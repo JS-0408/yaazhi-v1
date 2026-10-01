@@ -27,6 +27,17 @@ from config.settings import settings
 from core.context import YaazhiContext, set_context, clear_context
 
 
+def _client_ip(request: Request) -> str:
+    direct_ip = (request.client.host if request.client else "") or "unknown"
+    if direct_ip in settings.trusted_proxy_ips_list:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            candidate = xff.split(",")[0].strip()
+            if candidate:
+                return candidate
+    return direct_ip
+
+
 # ---------------------------------------------------------------------------
 # ContextExtractionMiddleware (P1.1: Multi-User Context)
 # ---------------------------------------------------------------------------
@@ -188,7 +199,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/metrics"):
             return await call_next(request)
         try:
-            client_ip = request.client.host if request.client else "unknown"
+            client_ip = _client_ip(request)
             r = await self._get_redis()
             key = f"ratelimit:{client_ip}"
             count = await r.incr(key)
@@ -215,10 +226,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     Validates X-API-Key for all non-public endpoints.
 
     SEC-4: Uses hmac.compare_digest() — immune to timing attacks.
-    SEC-5: /docs, /redoc, /openapi.json are gated to:
-           - Requests from 127.0.0.1 / ::1 (localhost), OR
-           - X-Internal-Request: true header (for reverse-proxy local traffic)
-           Any other client receives HTTP 401.
+    SEC-5: /docs, /redoc, /openapi.json are gated to localhost only.
 
     Always-public paths (no key required): /health, /metrics
     """
@@ -237,9 +245,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _is_local(request: Request) -> bool:
         """Return True if the request originates from localhost."""
-        client_host = (request.client.host if request.client else "") or ""
-        internal_header = request.headers.get("X-Internal-Request", "").lower()
-        return client_host in APIKeyMiddleware._LOCALHOST_HOSTS or internal_header == "true"
+        client_host = _client_ip(request)
+        return client_host in APIKeyMiddleware._LOCALHOST_HOSTS
 
     @staticmethod
     def _check_key(provided: str, expected: str) -> bool:
@@ -269,9 +276,14 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                 status_code=401,
             )
 
-        # Dev mode: no key configured — allow everything
+        # Fail-closed in production when key is absent.
         if not settings.yaazhi_api_key:
-            return await call_next(request)
+            if settings.env.lower() in {"development", "dev", "test"}:
+                return await call_next(request)
+            return JSONResponse(
+                {"detail": "Server misconfigured: YAAZHI_API_KEY is required in production."},
+                status_code=503,
+            )
 
         # Normal API paths — require valid X-API-Key
         provided_key = request.headers.get("X-API-Key", "")

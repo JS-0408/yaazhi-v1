@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import os
 import random
 import shutil
@@ -43,6 +44,11 @@ except ImportError:
 _MAX_CODE_LINES = 500
 _MAX_EXEC_SECONDS = 30
 _MAX_RETRIES = 4          # exponential backoff: 2^0..2^3 = 1..8 s
+_SANDBOX_ENV_ALLOWLIST = {
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONUTF8": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,7 @@ async def _run_in_subprocess(code: str, sandbox_dir: str) -> tuple[str, str, int
             stderr=asyncio.subprocess.PIPE,
             cwd=sandbox_dir,
             preexec_fn=preexec,
+            env=dict(_SANDBOX_ENV_ALLOWLIST),
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(
@@ -116,9 +123,18 @@ async def _run_in_pyodide(code: str) -> tuple[str, str, int]:
     """Execute code in PyodideSandbox — WebAssembly, no network."""
     sandbox = PyodideSandbox(allow_net=False)
     try:
-        result = await asyncio.to_thread(sandbox.run, code)
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
+        execute = getattr(sandbox, "execute", None)
+        run = getattr(sandbox, "run", None)
+        if callable(execute):
+            result = execute(code)
+            if inspect.isawaitable(result):
+                result = await result
+        elif callable(run):
+            result = await asyncio.to_thread(run, code)
+        else:
+            raise RuntimeError("PyodideSandbox has no execute/run method")
+        stdout = getattr(result, "stdout", "") or ""
+        stderr = getattr(result, "stderr", "") or ""
         returncode = 0 if not stderr else 1
         return stdout, stderr, returncode
     except Exception as exc:

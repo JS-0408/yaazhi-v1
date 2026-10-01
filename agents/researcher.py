@@ -19,6 +19,7 @@ import hashlib
 import json
 import time
 from typing import Literal, Optional
+from urllib.parse import urljoin
 
 import httpx
 import logfire
@@ -139,7 +140,7 @@ class ResearcherAgent:
                         "Chrome/120.0.0.0 Safari/537.36"
                     )
                 },
-                follow_redirects=True,
+                follow_redirects=False,
             )
         return self._http_client
 
@@ -260,7 +261,25 @@ class ResearcherAgent:
         logfire.debug("Fetching URL", url=url[:80])
 
         try:
-            response = await client.get(url, timeout=20.0)
+            current = url
+            response = None
+            for _ in range(5):
+                from agents.browser import validate_url
+
+                safe, reason = validate_url(current)
+                if not safe:
+                    return f"[URL blocked by SSRF filter: {reason}]"
+
+                response = await client.get(current, timeout=20.0, follow_redirects=False)
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    if not location:
+                        break
+                    current = urljoin(current, location)
+                    continue
+                break
+            if response is None:
+                return f"[Fetch failed for {url}]"
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             logfire.warning("URL fetch timeout", url=url[:60], error=str(exc))

@@ -65,6 +65,48 @@ _DANGEROUS_CODE_PATTERNS = [
     re.compile(r"urllib\.request\.(urlopen|urlretrieve|Request)\s*\("),
 ]
 
+_BLOCKED_IMPORT_ROOTS = {
+    "os",
+    "sys",
+    "subprocess",
+    "socket",
+    "requests",
+    "httpx",
+    "urllib",
+    "ftplib",
+    "telnetlib",
+    "pathlib",
+    "importlib",
+    "builtins",
+    "ctypes",
+    "shutil",
+}
+
+_BLOCKED_CALL_ROOTS = {
+    "exec",
+    "eval",
+    "__import__",
+    "compile",
+    "open",
+    "input",
+    "breakpoint",
+}
+
+_BLOCKED_ATTR_CALLS = {
+    ("os", "system"),
+    ("os", "popen"),
+    ("subprocess", "run"),
+    ("subprocess", "Popen"),
+    ("subprocess", "call"),
+    ("subprocess", "check_call"),
+    ("subprocess", "check_output"),
+    ("socket", "socket"),
+    ("requests", "get"),
+    ("requests", "post"),
+    ("httpx", "get"),
+    ("httpx", "post"),
+}
+
 # ─── Exceptions ────────────────────────────────────────────────────────────────
 
 class GuardrailViolation(ValueError):
@@ -369,6 +411,38 @@ def validate_output(response: str, confidence: float = 0.8) -> ValidatedOutput:
 
 
 def validate_code_for_execution(source_code: str) -> bool:
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError as exc:
+        raise GuardrailViolation("UNSAFE_CODE", f"Syntax error: {exc.msg}") from exc
+
+    aliases: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in _BLOCKED_IMPORT_ROOTS:
+                    raise GuardrailViolation("UNSAFE_CODE", f"Blocked import: {root}")
+                aliases[alias.asname or root] = root
+        elif isinstance(node, ast.ImportFrom):
+            mod = (node.module or "").split(".")[0]
+            if mod in _BLOCKED_IMPORT_ROOTS:
+                raise GuardrailViolation("UNSAFE_CODE", f"Blocked import: {mod}")
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = mod or alias.name
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                call_name = node.func.id
+                resolved = aliases.get(call_name, call_name)
+                if resolved in _BLOCKED_CALL_ROOTS:
+                    raise GuardrailViolation("UNSAFE_CODE", f"Blocked call: {resolved}()")
+            elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                root = aliases.get(node.func.value.id, node.func.value.id)
+                attr = node.func.attr
+                if (root, attr) in _BLOCKED_ATTR_CALLS:
+                    raise GuardrailViolation("UNSAFE_CODE", f"Blocked call: {root}.{attr}()")
+
     for pattern in _DANGEROUS_CODE_PATTERNS:
         if re.search(pattern, source_code):
             raise GuardrailViolation("UNSAFE_CODE", f"CRITICAL: Banned execution pattern '{pattern}' isolated.")

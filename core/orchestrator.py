@@ -122,11 +122,10 @@ class Yaazhi:
             True if planner and reviewer both respond, False otherwise.
         """
         try:
-            planner_ok, reviewer_ok = await asyncio.gather(
-                self.planner.ping(),
-                self.reviewer.ping(),
-                return_exceptions=True,
-            )
+            planner_ping = getattr(self.planner, "ping", None)
+            reviewer_ping = getattr(self.reviewer, "ping", None)
+            planner_ok = await planner_ping() if callable(planner_ping) else True
+            reviewer_ok = await reviewer_ping() if callable(reviewer_ping) else True
             return bool(planner_ok) and bool(reviewer_ok)
         except Exception as exc:
             logfire.error("Yaazhi ping failed", error=str(exc))
@@ -147,8 +146,9 @@ class Yaazhi:
         logfire.debug("Planner node executing")
         try:
             plan = await self.planner.plan(
-                user_input=state["user_input"],
+                task=state["user_input"],
                 context=state.get("memory_context", ""),
+                revise_reason=state["metadata"].get("retry_context", ""),
             )
             state["current_tasks"] = [t.model_dump() for t in plan.tasks]
             logfire.info("Planner node complete", task_count=len(plan.tasks))
@@ -191,8 +191,8 @@ class Yaazhi:
                 model_used = settings.get_litellm_model("research")
 
             elif task.task_type == TaskType.CODE:
-                result = await self.coder.code_loop(
-                    task_description=task.description,
+                result = await self.coder.write_and_run(
+                    task=task.description,
                     context=state.get("memory_context", ""),
                 )
                 content = f"```python\n{result.code}\n```\n\nOutput:\n{result.output}"
@@ -213,9 +213,7 @@ class Yaazhi:
                 model_used = settings.get_litellm_model("read_doc")
 
             elif task.task_type == TaskType.BROWSE:
-                result = await self.browser.search_web(task.description)
-                snippets = [r.get("snippet", "") for r in result[:3]]
-                content = "\n\n".join(snippets) or "No results found"
+                content = await self.browser.search_web(task.description)
                 model_used = "playwright"
 
             elif task.task_type == TaskType.NOTIFY:
@@ -436,12 +434,23 @@ class Yaazhi:
             total_ms = 0
 
         agents_called = list({v["agent_name"] for v in state["agent_outputs"].values()})
-        memories_used = len(state.get("memory_context", "").split("\n"))
+        memories_used = 0
+        if state.get("memory_context", "").strip():
+            memories_used = sum(
+                1 for line in state["memory_context"].splitlines() if line.strip()
+            )
+        success_outputs = [
+            v for v in state["agent_outputs"].values()
+            if v.get("success")
+        ]
+        confidence_score = 0.0
+        if success_outputs:
+            confidence_score = round(min(1.0, len(success_outputs) / max(1, len(state["current_tasks"]))), 2)
 
         output = YaazhiOutput(
             response=final_text,
             session_id=state["session_id"],
-            confidence_score=0.85,
+            confidence_score=confidence_score,
             sources_used=[],
             agents_called=agents_called,
             warnings=[],

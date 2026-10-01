@@ -241,9 +241,11 @@ class VectorStore:
                 )
             embedding: list[float] = resp.json()["embedding"]
         except Exception as exc:
-            logfire.warning("Ollama embedding service unavailable, using deterministic fallback", error=str(exc))
-            raw_hash = hashlib.sha256(text.encode("utf-8")).digest()
-            embedding = [(b / 255.0) for b in (raw_hash * 24)[:768]]
+            if settings.env == "test" and settings.allow_test_fake_embeddings:
+                logfire.warning("Embedding service unavailable, using explicit test-only fallback", error=str(exc))
+                raw_hash = hashlib.sha256(text.encode("utf-8")).digest()
+                return [(b / 255.0) for b in (raw_hash * 24)[:768]]
+            raise RuntimeError(f"Embedding service unavailable: {exc}") from exc
 
         if self._redis:
             try:
@@ -427,9 +429,13 @@ class VectorStore:
             duration_ms = int((time.time() - t_start) * 1000)
             logfire.info("VectorStore.add success (pgvector)", memory_id=memory_id, duration_ms=duration_ms)
             await self._post_add_index(memory_id)
+            if self._retriever and hasattr(self._retriever, "invalidate_user_cache"):
+                await self._retriever.invalidate_user_cache(uid)
             return memory_id
 
         # ── In-memory fallback path for tests and degraded mode ─────────────
+        if settings.env != "test":
+            raise RuntimeError("Persistent vector backends unavailable; refusing unsafe in-memory fallback")
         self._fallback_memory.append(
             {
                 "memory_id": memory_id,
@@ -441,6 +447,8 @@ class VectorStore:
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("VectorStore.add success (in-memory fallback)", memory_id=memory_id, duration_ms=duration_ms)
         await self._post_add_index(memory_id)
+        if self._retriever and hasattr(self._retriever, "invalidate_user_cache"):
+            await self._retriever.invalidate_user_cache(uid)
         return memory_id
 
     # ------------------------------------------------------------------
@@ -567,20 +575,34 @@ class VectorStore:
         if not results:
             if self._pg_pool:
                 vec_literal = self._pg_vector_literal(embedding)   # M4 FIX
+                pg_filter_clauses: list[str] = []
+                pg_filter_values: list[Any] = []
+                allowed_filter_keys = {"tinai", "domain", "session_id", "source_type", "user_id"}
+                for k, v in (filter or {}).items():
+                    if k in allowed_filter_keys:
+                        pg_filter_values.append(str(v))
+                        pg_filter_clauses.append(f"metadata->>'{k}' = ${len(pg_filter_values) + 3}")
+                if "user_id" in (filter or {}):
+                    uid = str((filter or {})["user_id"])
+                where_suffix = ""
+                if pg_filter_clauses:
+                    where_suffix = " AND " + " AND ".join(pg_filter_clauses)
                 async with self._pg_pool.acquire() as conn:
                     # P1.1: Filter by user_id to ensure isolation
                     rows = await conn.fetch(
-                        """
+                        f"""
                         SELECT id::text, content, embedding <=> $1::vector AS distance,
                                metadata, source, created_at
                         FROM yaazhi_memories
                         WHERE user_id = $3 OR metadata->>'user_id' = $3
+                        {where_suffix}
                         ORDER BY distance ASC
                         LIMIT $2
                         """,
                         vec_literal,
                         top_k,
                         uid,  # P1.1: user_id filter
+                        *pg_filter_values,
                     )
                     for row in rows:
                         score = max(0.0, 1.0 - float(row["distance"]))
@@ -596,6 +618,8 @@ class VectorStore:
                             )
                         )
             elif self._fallback_memory is not None:
+                if settings.env != "test":
+                    raise RuntimeError("Persistent vector backends unavailable; refusing unsafe in-memory fallback")
                 results = self._search_fallback_memory(query, top_k, filter, uid, agent_id)
             else:
                 raise RuntimeError("No vector store backend available")
@@ -635,9 +659,10 @@ class VectorStore:
     # delete
     # ------------------------------------------------------------------
 
-    async def delete(self, memory_id: str) -> bool:
+    async def delete(self, memory_id: str, user_id: Optional[str] = None) -> bool:
         logfire.debug("VectorStore.delete called", memory_id=memory_id)
         await self._ensure_clients()
+        uid = user_id or settings.default_user_id
         try:
             if self._use_mem0 and self._mem0:
                 await asyncio.to_thread(self._mem0.delete, memory_id=memory_id)
@@ -646,8 +671,12 @@ class VectorStore:
             elif self._pg_pool:
                 async with self._pg_pool.acquire() as conn:
                     await conn.execute(
-                        "DELETE FROM yaazhi_memories WHERE id = $1", uuid.UUID(memory_id)
+                        "DELETE FROM yaazhi_memories WHERE id = $1 AND (user_id = $2 OR metadata->>'user_id' = $2)",
+                        uuid.UUID(memory_id),
+                        uid,
                     )
+            if self._retriever and hasattr(self._retriever, "invalidate_user_cache"):
+                await self._retriever.invalidate_user_cache(uid)
             logfire.info("VectorStore.delete success", memory_id=memory_id)
             return True
         except Exception as exc:
@@ -675,10 +704,11 @@ class VectorStore:
     # clear_old
     # ------------------------------------------------------------------
 
-    async def clear_old(self, days: int = 90) -> int:
+    async def clear_old(self, days: int = 90, user_id: Optional[str] = None) -> int:
         logfire.debug("VectorStore.clear_old called", days=days)
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         deleted = 0
+        uid = user_id or settings.default_user_id
         await self._ensure_clients()
         try:
             if self._use_chroma and self._chroma_collection:
@@ -715,7 +745,9 @@ class VectorStore:
             elif self._pg_pool:
                 async with self._pg_pool.acquire() as conn:
                     result = await conn.execute(
-                        "DELETE FROM yaazhi_memories WHERE created_at < $1", cutoff
+                        "DELETE FROM yaazhi_memories WHERE created_at < $1 AND (user_id = $2 OR metadata->>'user_id' = $2)",
+                        cutoff,
+                        uid,
                     )
                     deleted = int(result.split()[-1])
             logfire.info("VectorStore.clear_old success", deleted=deleted, days=days)
@@ -727,10 +759,11 @@ class VectorStore:
     # export_backup
     # ------------------------------------------------------------------
 
-    async def export_backup(self, path: str) -> None:
+    async def export_backup(self, path: str, user_id: Optional[str] = None) -> None:
         logfire.debug("VectorStore.export_backup called", path=path)
         await self._ensure_clients()
         records: list[dict[str, Any]] = []
+        uid = user_id or settings.default_user_id
 
         if self._use_chroma and self._chroma_collection:
             raw = await asyncio.to_thread(
@@ -747,7 +780,8 @@ class VectorStore:
         elif self._pg_pool:
             async with self._pg_pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id::text, content, metadata, source, created_at FROM yaazhi_memories"
+                    "SELECT id::text, content, metadata, source, created_at FROM yaazhi_memories WHERE user_id = $1 OR metadata->>'user_id' = $1",
+                    uid,
                 )
                 for row in rows:
                     records.append(
