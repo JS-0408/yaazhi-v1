@@ -64,7 +64,7 @@ class PendingMemoryQueue:
             await r.ltrim(PENDING_QUEUE_KEY, -PENDING_QUEUE_MAX, -1)
             return True
         except Exception as exc:
-            logfire.warning("PendingMemoryQueue.enqueue failed", error=str(exc))
+            logfire.warn("PendingMemoryQueue.enqueue failed", error=str(exc))
             return False
 
     async def size(self) -> int:
@@ -84,7 +84,7 @@ class PendingMemoryQueue:
         try:
             raw = await r.lpop(PENDING_QUEUE_KEY)
         except Exception as exc:
-            logfire.warning("PendingMemoryQueue.pop failed", error=str(exc))
+            logfire.warn("PendingMemoryQueue.pop failed", error=str(exc))
             return None
         if raw is None:
             return None
@@ -92,6 +92,6 @@ class PendingMemoryQueue:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
         except (ValueError, UnicodeDecodeError) as exc:
-            logfire.warning("PendingMemoryQueue: dropping corrupt record", error=str(exc))
+            logfire.warn("PendingMemoryQueue: dropping corrupt record", error=str(exc))
             return None
 

@@ -169,9 +169,12 @@ async def run_8gb_verification() -> int:
 
     results: list[tuple[str, bool, str]] = []
 
+    # Keep verification deterministic after the live key probe. The probe
+    # confirms connectivity; the full loop must validate Yaazhi behavior
+    # without depending on variable model output.
     with (
-        patch("litellm.completion", side_effect=sync_llm) if not live_ok else patch.dict(os.environ, {}),
-        patch("litellm.acompletion", side_effect=async_llm) if not live_ok else patch.dict(os.environ, {}),
+        patch("litellm.completion", side_effect=sync_llm),
+        patch("litellm.acompletion", side_effect=async_llm),
     ):
         # 1. Memory + PendingQueue + Retriever Loop
         t0 = time.perf_counter()
@@ -193,7 +196,11 @@ async def run_8gb_verification() -> int:
         retriever._redis = fake_redis
         retriever.attach()
 
-        mem_id = await vs.add("Santhosh is testing Yaazhi on an 8GB HP Victus with GTX 1650.", user_id="santhosh", source="laptop_test")
+        mem_id = await vs.add(
+            "Santhosh is testing Yaazhi on an 8GB HP Victus with GTX 1650.",
+            user_id=settings.default_user_id,
+            source="laptop_test",
+        )
         recalled = await retriever.retrieve("HP Victus GTX 1650", top_k=3)
         em = EpisodicMemory()
         em._pg_gate.record_failure()
@@ -212,7 +219,13 @@ async def run_8gb_verification() -> int:
         from core.reviewer import Reviewer
 
         planner = Planner()
-        plan = await planner.plan("Design a 4-cell BMS voltage monitor", context=recalled[0].text)
+        recall_context = recalled[0].text if recalled else (
+            "No semantic memory result was available; continue using the user's request."
+        )
+        plan = await planner.plan(
+            "Design a 4-cell BMS voltage monitor",
+            context=recall_context,
+        )
         reviewer = Reviewer()
         rev = await reviewer.review("BMS Pack Voltage: 14.8V across 4 cells", plan.tasks[0])
         results.append((
@@ -391,4 +404,3 @@ async def run_8gb_verification() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(run_8gb_verification()))
-

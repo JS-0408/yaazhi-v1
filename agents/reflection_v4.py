@@ -150,7 +150,7 @@ class ReflectionPipeline:
         try:
             recent = await event_logger.fetch_recent(tinai=tinai, limit=100)
         except Exception as exc:
-            logfire.warning("ReflectionPipeline: step2 fetch failed", error=str(exc))
+            logfire.warn("ReflectionPipeline: step2 fetch failed", error=str(exc))
             return
 
         if not recent:
@@ -200,7 +200,7 @@ class ReflectionPipeline:
                         delta    = 0.1 * count,
                     )
                 except Exception as exc:
-                    logfire.warning(
+                    logfire.warn(
                         "ReflectionPipeline: edge weight update failed",
                         error=str(exc),
                     )
@@ -235,7 +235,7 @@ class ReflectionPipeline:
                 errors=error_count,
             )
         except Exception as exc:
-            logfire.warning("ReflectionPipeline: step4 failed", error=str(exc))
+            logfire.warn("ReflectionPipeline: step4 failed", error=str(exc))
 
 
 # ─── Module-level singleton ───────────────────────────────────────────────────

@@ -56,6 +56,52 @@ async def test_search_no_mutable_default_contamination():
         assert call_filters[0] != call_filters[1]
 
 
+def test_fallback_search_excludes_unrelated_memories():
+    """Unrelated memories must not be injected into a new answer context."""
+    vs = VectorStore()
+    vs._fallback_memory = [
+        {
+            "memory_id": "relevant",
+            "content": "The project uses 18650 Li-ion cells.",
+            "metadata": {},
+            "source": "chat",
+        },
+        {
+            "memory_id": "unrelated",
+            "content": "The user's favorite color is blue.",
+            "metadata": {},
+            "source": "chat",
+        },
+    ]
+
+    results = vs._search_fallback_memory("18650 battery cells", top_k=5)
+
+    assert [result.memory_id for result in results] == ["relevant"]
+
+
+@pytest.mark.asyncio
+async def test_build_context_delimits_memories(mock_redis):
+    """Retrieved memories must be clearly separated from the user prompt."""
+    vs = AsyncMock()
+    retriever = SemanticRetriever(vs)
+    retriever._redis = mock_redis
+
+    from core.state import MemoryResult
+
+    vs.search = AsyncMock(return_value=[
+        MemoryResult(
+            memory_id="mem-1",
+            text="The project uses 18650 cells.",
+            score=1.0,
+            source="chat",
+        )
+    ])
+    context = await retriever.build_context("18650 cells")
+
+    assert "<memory index=\"1\" source=\"chat\">" in context
+    assert "</memory>" in context
+
+
 # ---------------------------------------------------------------------------
 # Roundtrip store + recall
 # ---------------------------------------------------------------------------
@@ -466,4 +512,3 @@ def test_api_key_middleware_fails_closed_in_production(test_client, monkeypatch)
     resp = test_client.get("/api/v1/skills")
     assert resp.status_code == 500
     assert "YAAZHI_API_KEY not set in production" in resp.json()["detail"]
-

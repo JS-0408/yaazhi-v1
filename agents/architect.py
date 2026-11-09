@@ -98,7 +98,7 @@ async def _litellm_with_retry(
                 raise
             if attempt < max_attempts - 1:
                 delay = base_delay * (2 ** attempt) + random.uniform(0.0, 1.0)
-                logfire.warning(
+                logfire.warn(
                     "litellm rate-limit / transient error — retrying",
                     attempt=attempt + 1,
                     delay_s=round(delay, 2),
@@ -370,7 +370,7 @@ class ArchitectAgent:
         for file_spec in design.get("files", []):
             path = file_spec.get("path", "")
             if not self._is_allowed_path(path):
-                logfire.warning("ArchitectAgent: blocked forbidden path", path=path)
+                logfire.warn("ArchitectAgent: blocked forbidden path", path=path)
                 continue
 
             target = self._PROJECT_ROOT / path
@@ -395,7 +395,7 @@ class ArchitectAgent:
             if fc.path.endswith(".py"):
                 ok, err = self._validate_syntax(fc.content)
                 if not ok:
-                    logfire.warning(
+                    logfire.warn(
                         "ArchitectAgent: syntax error in generated file",
                         path=fc.path,
                         error=err,
@@ -730,7 +730,7 @@ Output ONLY valid JSON with this structure:
                     await fh.write(f"\n# Added by ArchitectAgent\n{package}\n")
                 logfire.info("ArchitectAgent: appended to requirements.txt", package=package)
         except Exception as exc:
-            logfire.warning("ArchitectAgent._append_requirement failed", error=str(exc))
+            logfire.warn("ArchitectAgent._append_requirement failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Handle YES/NO response in chat

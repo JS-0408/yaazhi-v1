@@ -288,7 +288,7 @@ async def list_all_sessions(request: Request) -> list[dict]:
                     break
             return results
         except Exception as exc:
-            logfire.warning("GET /memory/sessions: Redis scan failed, using fallback", error=str(exc))
+            logfire.warn("GET /memory/sessions: Redis scan failed, using fallback", error=str(exc))
 
     for key_str, msgs in getattr(episodic, "_fallback_sessions", {}).items():
         parts = key_str.split(":")
@@ -328,7 +328,7 @@ async def consolidate_sessions(request: Request) -> dict:
                             await episodic.summarize_session(session_id)
                             compressed += 1
                         except Exception as exc:
-                            logfire.warning(
+                            logfire.warn(
                                 "consolidate: summarize failed",
                                 session_id=session_id[:8],
                                 error=str(exc),
@@ -336,7 +336,7 @@ async def consolidate_sessions(request: Request) -> dict:
                 if cursor == 0:
                     break
         except Exception as exc:
-            logfire.warning("POST /memory/consolidate: Redis scan failed", error=str(exc))
+            logfire.warn("POST /memory/consolidate: Redis scan failed", error=str(exc))
 
     drained = 0
     vs = getattr(state, "vector_store", None)
@@ -344,7 +344,7 @@ async def consolidate_sessions(request: Request) -> dict:
         try:
             drained = await vs.drain_pending()
         except Exception as exc:
-            logfire.warning("POST /memory/consolidate: drain_pending failed", error=str(exc))
+            logfire.warn("POST /memory/consolidate: drain_pending failed", error=str(exc))
 
     logfire.info("Memory consolidation complete", sessions_compressed=compressed, pending_drained=drained)
     return {"sessions_compressed": compressed, "pending_memories_drained": drained}

@@ -65,7 +65,7 @@ class ReaderAgent:
             )
             return bool(response.choices[0].message.content)
         except Exception as exc:
-            logfire.warning("ReaderAgent ping failed", error=str(exc))
+            logfire.warn("ReaderAgent ping failed", error=str(exc))
             return False
 
     async def _get_http_client(self) -> httpx.AsyncClient:
@@ -142,7 +142,7 @@ class ReaderAgent:
                 logfire.debug("LLM call succeeded", model=model, response_length=len(content))
                 return content
             except Exception as exc:
-                logfire.warning("LLM call failed", model=model, label=label, error=str(exc))
+                logfire.warn("LLM call failed", model=model, label=label, error=str(exc))
                 if label == "fallback":
                     raise RuntimeError(f"All reading models failed: {exc}") from exc
 
@@ -201,13 +201,13 @@ class ReaderAgent:
                         if page_text.strip():
                             all_text.append(f"[Page {page_num + 1}]\n{page_text}")
                     except Exception as exc:
-                        logfire.warning("Page extraction failed", page=page_num + 1, error=str(exc))
+                        logfire.warn("Page extraction failed", page=page_num + 1, error=str(exc))
 
         except _PdfReadError as exc:
             raise RuntimeError(f"PDF is corrupted or encrypted: {exc}") from exc
 
         if not all_text:
-            logfire.warning("PDF contains no extractable text", file=file_path)
+            logfire.warn("PDF contains no extractable text", file=file_path)
             return DocumentResult(
                 summary=f"PDF '{safe_path.name}' appears to be image-based with no extractable text. "
                         f"Consider using an OCR tool to extract content.",
@@ -323,7 +323,7 @@ class ReaderAgent:
             response = await client.get(url, timeout=25.0)
             response.raise_for_status()
         except httpx.TimeoutException:
-            logfire.warning("URL fetch timeout", url=url[:60])
+            logfire.warn("URL fetch timeout", url=url[:60])
             return DocumentResult(
                 summary=f"Could not fetch {url}: request timed out",
                 key_facts=["URL unreachable due to timeout"],
@@ -331,7 +331,7 @@ class ReaderAgent:
                 confidence_score=0.0,
             )
         except httpx.HTTPStatusError as exc:
-            logfire.warning("URL HTTP error", url=url[:60], status=exc.response.status_code)
+            logfire.warn("URL HTTP error", url=url[:60], status=exc.response.status_code)
             return DocumentResult(
                 summary=f"Could not fetch {url}: HTTP {exc.response.status_code}",
                 key_facts=[f"HTTP error {exc.response.status_code}"],

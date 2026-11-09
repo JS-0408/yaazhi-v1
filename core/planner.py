@@ -81,7 +81,9 @@ Rules:
 2. Maximum {_MAX_SUBTASKS} subtasks allowed — keep plans concise.
 3. Use depends_on to express ordering (task_id of prerequisite subtask).
 4. Prefer parallel execution: group independent subtasks (no shared depends_on).
-5. Use memory_only if the answer is already in Yaazhi's knowledge base.
+5. Use memory_only only for explicit personal-memory requests such as
+   "remember", "recall", "what did I tell you", or preference/history questions.
+   Do not use memory_only for ordinary factual questions; use researcher instead.
 6. Always return valid JSON — no markdown, no explanation, just JSON.
 
 Output format (strict JSON):
@@ -185,12 +187,12 @@ class Planner:
                     {"role": "user", "content": user_content},
                 ],
                 max_tokens=1000,
-                temperature=0.2,
+                temperature=0.0,
                 response_format={"type": "json_object"},
             )
             return response.choices[0].message.content or "{}"
         except Exception as exc:
-            logfire.warning("Planner: primary LLM failed, trying fallback", error=str(exc))
+            logfire.warn("Planner: primary LLM failed, trying fallback", error=str(exc))
             # VECTOR-5 FIX: fallback uses get_fallback_model (e.g. ollama/llama3.2) so it
             # hits a DIFFERENT endpoint from the rate-limited primary — not the same one.
             try:
@@ -203,7 +205,7 @@ class Planner:
                         {"role": "user", "content": user_content},
                     ],
                     max_tokens=1000,
-                    temperature=0.2,
+                    temperature=0.0,
                 )
                 return response.choices[0].message.content or "{}"
             except Exception as exc2:
@@ -255,6 +257,24 @@ class Planner:
 
                 tasks.append(SubTask(**task_payload))
 
+            # A model may over-select memory_only when context is present. That
+            # makes old chat transcripts answer a new factual question. Keep
+            # memory-only execution reserved for explicit recall requests.
+            if (
+                tasks
+                and all(t.task_type == TaskType.MEMORY for t in tasks)
+                and not self._is_explicit_memory_request(original_task)
+            ):
+                tasks[0] = SubTask(
+                    task_id=tasks[0].task_id,
+                    task_type=TaskType.RESEARCH,
+                    description=original_task,
+                    depends_on=[],
+                    priority=tasks[0].priority,
+                    requires_human_approval=tasks[0].requires_human_approval,
+                )
+                tasks = tasks[:1]
+
             plan = TaskPlan(
                 tasks=tasks,
                 estimated_total_duration_seconds=sum(t.priority * 10 for t in tasks),
@@ -266,15 +286,33 @@ class Planner:
             )
             return plan
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            logfire.warning("Planner: JSON parse failed, using fallback plan", error=str(exc))
+            logfire.warn("Planner: JSON parse failed, using fallback plan", error=str(exc))
             return self._fallback_plan(original_task)
         except ValidationError as exc:
-            logfire.warning(
+            logfire.warn(
                 "Planner: validation failed, using fallback plan",
                 errors=exc.error_count(),
                 detail=str(exc)[:300],
             )
             return self._fallback_plan(original_task)
+
+    @staticmethod
+    def _is_explicit_memory_request(task: str) -> bool:
+        """Return whether the user explicitly asked for personal memory."""
+        task_lower = task.lower()
+        return any(
+            phrase in task_lower
+            for phrase in (
+                "remember",
+                "recall",
+                "what did i tell",
+                "what do you know about me",
+                "my preference",
+                "my preferences",
+                "our previous conversation",
+                "earlier conversation",
+            )
+        )
 
     @staticmethod
     def _fallback_plan(task: str) -> TaskPlan:
@@ -347,7 +385,7 @@ class Planner:
             ]
             if not ready:
                 # Circular dependency detected — push all remaining as one group
-                logfire.warning(
+                logfire.warn(
                     "Planner.get_parallel_groups: circular dependency detected, "
                     "forcing sequential execution"
                 )

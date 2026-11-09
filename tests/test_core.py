@@ -208,6 +208,30 @@ class TestPlanner:
         assert plan.tasks[0].task_type == TaskType.RESEARCH
 
     @patch("core.planner.litellm")
+    @pytest.mark.asyncio
+    async def test_factual_request_does_not_use_memory_only(self, mock_litellm):
+        """Historical context must not turn a factual request into transcript replay."""
+        import json
+        from core.planner import Planner
+        from core.state import TaskType
+
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content=json.dumps({
+                "tasks": [{
+                    "task_type": "memory_only",
+                    "description": "Answer from recalled context",
+                }]
+            })))]
+        )
+
+        plan = await Planner().plan(
+            "Explain 7S lithium-ion battery pack voltage",
+            context="Previous unrelated chat transcript",
+        )
+
+        assert plan.tasks[0].task_type == TaskType.RESEARCH
+
+    @patch("core.planner.litellm")
     def test_get_parallel_groups_no_deps(self, mock_litellm):
         """Tasks with no dependencies should all be in one parallel group."""
         from core.planner import Planner

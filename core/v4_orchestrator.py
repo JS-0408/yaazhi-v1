@@ -127,7 +127,7 @@ class YaazhiV4(Yaazhi):
                     for r in raw_results
                 ]
             except Exception as exc:
-                logfire.warning("V4.run: vector retrieval failed", error=str(exc))
+                logfire.warn("V4.run: vector retrieval failed", error=str(exc))
                 vector_dicts = []
             logfire.info("V4.run: Step2 → Puram route", vectors=len(vector_dicts))
 
@@ -139,7 +139,7 @@ class YaazhiV4(Yaazhi):
                 vector_results = vector_dicts if route.domain == Domain.PURAM else [],
             )
         except Exception as exc:
-            logfire.warning("V4.run: context assembly failed", error=str(exc))
+            logfire.warn("V4.run: context assembly failed", error=str(exc))
             assembled = akam_context  # fallback to Akam snapshot if Puram assembly fails
 
         combined_context = "\n".join(filter(None, [akam_context, assembled, context]))

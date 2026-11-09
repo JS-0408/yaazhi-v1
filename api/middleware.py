@@ -39,7 +39,7 @@ class ContextExtractionMiddleware(BaseHTTPMiddleware):
     Automatically cleaned up after response.
     """
 
-    _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/metrics"])
+    _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/ready", "/metrics"])
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path.startswith("/metrics"):
@@ -195,14 +195,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if count == 1:
                 await r.expire(key, self._WINDOW)
             if count > self._LIMIT:
-                logfire.warning("Rate limit exceeded", client_ip=client_ip, count=count)
+                logfire.warn("Rate limit exceeded", client_ip=client_ip, count=count)
                 return JSONResponse(
                     {"detail": f"Rate limit exceeded. Max {self._LIMIT} requests/min."},
                     status_code=429,
                     headers={"Retry-After": str(self._WINDOW)},
                 )
         except Exception as exc:
-            logfire.warning("RateLimitMiddleware error (skipping check)", error=str(exc))
+            logfire.warn("RateLimitMiddleware error (skipping check)", error=str(exc))
         return await call_next(request)
 
 
@@ -220,17 +220,19 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
            - X-Internal-Request: true header (for reverse-proxy local traffic)
            Any other client receives HTTP 401.
 
-    Always-public paths (no key required): /health, /metrics
+    Always-public paths (no key required): /health, /ready, /metrics
     """
 
-    _PUBLIC_PATHS: frozenset[str] = frozenset(["/", "/console", "/health", "/metrics", "/metrics/"])
+    _PUBLIC_PATHS: frozenset[str] = frozenset(
+        ["/", "/console", "/health", "/ready", "/metrics", "/metrics/"]
+    )
     _DOC_PATHS: frozenset[str] = frozenset(["/docs", "/redoc", "/openapi.json"])
     _LOCALHOST_HOSTS: frozenset[str] = frozenset(["127.0.0.1", "::1", "localhost"])
 
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
         if not settings.yaazhi_api_key:
-            logfire.warning(
+            logfire.warn(
                 "YAAZHI_API_KEY is not set — API running in unauthenticated dev mode"
             )
 
@@ -259,7 +261,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(doc) for doc in self._DOC_PATHS):
             if self._is_local(request):
                 return await call_next(request)
-            logfire.warning(
+            logfire.warn(
                 "Docs access denied from non-local IP",
                 path=path,
                 client=request.client.host if request.client else "unknown",
@@ -282,7 +284,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         # Normal API paths — require valid X-API-Key
         provided_key = request.headers.get("X-API-Key", "")
         if not self._check_key(provided_key, settings.yaazhi_api_key):
-            logfire.warning(
+            logfire.warn(
                 "Unauthorized API request",
                 path=path,
                 key_prefix=provided_key[:8] if provided_key else "missing",

@@ -58,6 +58,27 @@ def test_health_is_public(test_client):
     assert resp.status_code == 200
 
 
+def test_readiness_reports_core_services(test_client):
+    """Core readiness must remain independent from optional integrations."""
+    test_client.app.state.ping_results = {
+        "vector_store": True,
+        "episodic": True,
+        "preferences": True,
+        "retriever": True,
+        "stt": True,
+        "tts": True,
+        "yaazhi": True,
+        "browser": False,
+        "notifier": False,
+    }
+    resp = test_client.get("/ready")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is True
+    assert data["missing"] == []
+    assert data["optional_services"] == {"browser": False, "notifier": False}
+
+
 def test_metrics_is_public(test_client):
     """GET /metrics must not require an API key."""
     resp = test_client.get("/metrics", follow_redirects=True)
@@ -311,4 +332,3 @@ def test_memory_sessions_and_consolidate_survive_redis_outage(test_client):
     cons_data = resp_consolidate.json()
     assert cons_data["sessions_compressed"] == 0
     assert cons_data["pending_memories_drained"] == 3
-

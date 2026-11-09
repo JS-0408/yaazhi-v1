@@ -73,7 +73,7 @@ class EpisodicEventLogger:
             self._pg_gate.reset()
         except Exception as exc:
             self._pg_gate.record_failure()
-            logfire.warning("EpisodicEventLogger: PG pool failed", error=str(exc))
+            logfire.warn("EpisodicEventLogger: PG pool failed", error=str(exc))
 
     async def log(
         self,

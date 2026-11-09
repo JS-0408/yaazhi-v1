@@ -16,6 +16,7 @@ import asyncio
 import os
 import random
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -38,7 +39,7 @@ try:
     _PYODIDE_AVAILABLE = True
 except ImportError:
     _PYODIDE_AVAILABLE = False
-    logfire.warning("langchain-sandbox not installed — using subprocess fallback with setrlimit")
+    logfire.warn("langchain-sandbox not installed — using subprocess fallback with setrlimit")
 
 _MAX_CODE_LINES = 500
 _MAX_EXEC_SECONDS = 30
@@ -68,7 +69,7 @@ def _apply_resource_limits() -> None:
         resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
     except Exception as exc:
         # If setrlimit fails (e.g. in container without CAP_SYS_RESOURCE) log and continue
-        logfire.warning("setrlimit failed (non-fatal)", error=str(exc))
+        logfire.warn("setrlimit failed (non-fatal)", error=str(exc))
 
 
 async def _run_in_subprocess(code: str, sandbox_dir: str) -> tuple[str, str, int]:
@@ -83,6 +84,24 @@ async def _run_in_subprocess(code: str, sandbox_dir: str) -> tuple[str, str, int
     preexec = None if sys.platform == "win32" else _apply_resource_limits
 
     try:
+        if sys.platform == "win32":
+            try:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    [sys.executable, str(script_path)],
+                    capture_output=True,
+                    cwd=sandbox_dir,
+                    timeout=_MAX_EXEC_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return "", f"Execution timed out after {_MAX_EXEC_SECONDS}s", -1
+            return (
+                completed.stdout.decode("utf-8", errors="replace"),
+                completed.stderr.decode("utf-8", errors="replace"),
+                completed.returncode,
+            )
+
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             str(script_path),
@@ -218,7 +237,7 @@ class CoderAgent:
                 f"Code rejected: {line_count} lines exceeds the {_MAX_CODE_LINES}-line limit. "
                 "Break the task into smaller subtasks."
             )
-            logfire.warning("CoderAgent: code too long", lines=line_count)
+            logfire.warn("CoderAgent: code too long", lines=line_count)
             return CodeResult(
                 code=code,
                 stdout="",
@@ -239,7 +258,7 @@ class CoderAgent:
             safety_reason = exc.detail
         
         if not safe:
-            logfire.warning("CoderAgent: code failed safety check", reason=safety_reason)
+            logfire.warn("CoderAgent: code failed safety check", reason=safety_reason)
             return CodeResult(
                 code=code,
                 stdout="",
@@ -253,7 +272,7 @@ class CoderAgent:
         # ── Guard: syntax validation ──────────────────────────────────────
         syntax_ok, syntax_err = self.validate_syntax(code)
         if not syntax_ok:
-            logfire.warning("CoderAgent: syntax error", error=syntax_err)
+            logfire.warn("CoderAgent: syntax error", error=syntax_err)
             # Fall through to fix loop starting at attempt 0 with syntax_err
 
         # ── Create sandbox directory ──────────────────────────────────────
@@ -460,7 +479,7 @@ class CoderAgent:
                 raw = raw[:-3]
             return raw.strip()
         except Exception as exc:
-            logfire.warning("CoderAgent._ask_llm_to_fix failed", error=str(exc))
+            logfire.warn("CoderAgent._ask_llm_to_fix failed", error=str(exc))
             return ""
 
     # ------------------------------------------------------------------

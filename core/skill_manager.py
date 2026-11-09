@@ -99,7 +99,7 @@ class SkillManager:
                 settings.redis_url, encoding="utf-8", decode_responses=True
             )
         except Exception as exc:
-            logfire.warning("SkillManager: Redis unavailable, using local fallback", error=str(exc))
+            logfire.warn("SkillManager: Redis unavailable, using local fallback", error=str(exc))
 
     # ------------------------------------------------------------------
     # Local & Multi-VPS Cluster Discovery
@@ -136,7 +136,7 @@ class SkillManager:
             }
             await self._redis.hset(self._REDIS_INSTALLED_HASH, manifest.name, json.dumps(payload))
         except Exception as exc:
-            logfire.warning("SkillManager._publish_to_cluster failed", error=str(exc))
+            logfire.warn("SkillManager._publish_to_cluster failed", error=str(exc))
 
     async def _write_skill_to_disk(self, skill_name: str, files: dict[str, str]) -> Path:
         return await write_skill_to_disk(self.skills_dir, skill_name, files)
@@ -233,7 +233,7 @@ class SkillManager:
                 key = f"{self._REDIS_STAGED_PREFIX}:{staged.session_id}:{staged.skill_id}"
                 await self._redis.set(key, serialize_staged(staged), ex=self._REDIS_TTL)
             except Exception as exc:
-                logfire.warning("SkillManager._save_staged: Redis write failed", error=str(exc))
+                logfire.warn("SkillManager._save_staged: Redis write failed", error=str(exc))
 
     async def get_staged(self, skill_id: str, session_id: str = "global") -> Optional[StagedSkill]:
         await self._ensure_redis()
@@ -244,7 +244,7 @@ class SkillManager:
                     if raw:
                         return deserialize_staged(raw)
                 except Exception as exc:
-                    logfire.warning("SkillManager.get_staged: Redis read failed", error=str(exc))
+                    logfire.warn("SkillManager.get_staged: Redis read failed", error=str(exc))
             fallback = self._staged_fallback.get(f"{sid}:{skill_id}")
             if fallback is not None:
                 return fallback
@@ -304,7 +304,7 @@ class SkillManager:
                     user_id=settings.default_user_id,
                 )
             except Exception as exc:
-                logfire.warning("SkillManager: failed to index skill in VectorStore", error=str(exc))
+                logfire.warn("SkillManager: failed to index skill in VectorStore", error=str(exc))
         return staged.manifest
 
     async def work_on_skill(self, skill_name: str, instruction: str, test_input: str = "") -> dict[str, Any]:

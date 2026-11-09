@@ -80,7 +80,7 @@ def validate_url(url: str) -> tuple[bool, str]:
 
         for blocked_net in _BLOCKED_NETWORKS:
             if ip_obj in blocked_net:
-                logfire.warning(
+                logfire.warn(
                     "BrowserAgent: SSRF blocked",
                     url=url,
                     resolved_ip=ip_str,
@@ -236,7 +236,7 @@ class BrowserAgent:
 
             status = response.status if response else 0
             if status >= 400:
-                logfire.warning("BrowserAgent.navigate HTTP error", url=url, status=status)
+                logfire.warn("BrowserAgent.navigate HTTP error", url=url, status=status)
 
             content = await self._page.inner_text("body")
             content = content[:50_000]   # cap to 50k chars
@@ -403,5 +403,5 @@ class BrowserAgent:
                 for r in raw_results
             ]
         except Exception as exc:
-            logfire.warning("BrowserAgent.search_web failed", query=query[:80], error=str(exc))
+            logfire.warn("BrowserAgent.search_web failed", query=query[:80], error=str(exc))
             return []

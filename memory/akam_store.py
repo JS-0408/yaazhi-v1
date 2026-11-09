@@ -131,7 +131,7 @@ class AkamStore:
             self._pg_gate.reset()
         except Exception as exc:
             self._pg_gate.record_failure()
-            logfire.warning("AkamStore: PostgreSQL pool failed", error=str(exc))
+            logfire.warn("AkamStore: PostgreSQL pool failed", error=str(exc))
 
     async def _ensure_redis(self) -> None:
         if self._redis is not None:
@@ -142,7 +142,7 @@ class AkamStore:
                 settings.redis_url, encoding="utf-8", decode_responses=True
             )
         except Exception as exc:
-            logfire.warning("AkamStore: Redis connection failed", error=str(exc))
+            logfire.warn("AkamStore: Redis connection failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Load — read Akam state (Redis → PG fallback)
@@ -176,7 +176,7 @@ class AkamStore:
                     logfire.debug("AkamStore.load: cache hit", user_id=uid)
                     return self._hydrate(data)
             except Exception as exc:
-                logfire.warning("AkamStore: Redis read failed", error=str(exc))
+                logfire.warn("AkamStore: Redis read failed", error=str(exc))
 
         # 2. PostgreSQL
         if self._pg_pool:
@@ -215,7 +215,7 @@ class AkamStore:
                         await self._cache_state(uid, state)
                         return state
             except Exception as exc:
-                logfire.warning("AkamStore.load: PG read failed", error=str(exc))
+                logfire.warn("AkamStore.load: PG read failed", error=str(exc))
 
         # 3. First-run default
         logfire.info("AkamStore.load: no existing state, returning default", user_id=uid)
@@ -361,7 +361,7 @@ class AkamStore:
             }
             await self._redis.set(key, json.dumps(payload), ex=self._REDIS_TTL)
         except Exception as exc:
-            logfire.warning("AkamStore._cache_state: Redis write failed", error=str(exc))
+            logfire.warn("AkamStore._cache_state: Redis write failed", error=str(exc))
 
     async def close(self) -> None:
         if self._redis:

@@ -137,7 +137,7 @@ async def voice_chat(
                 session_id=session_id,
             )
         except Exception as exc:
-            logfire.warning("POST /voice/chat: vector_store.add failed (non-fatal)", error=str(exc))
+            logfire.warn("POST /voice/chat: vector_store.add failed (non-fatal)", error=str(exc))
 
     meta: dict[str, Any] = getattr(output, "metadata", {}) or {}
     logfire.info("POST /voice/chat success", session_id=session_id[:8])
@@ -266,4 +266,4 @@ async def voice_realtime_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         logfire.info("Realtime voice WebSocket disconnected", session_id=session_id[:8])
     except Exception as exc:
-        logfire.warning("Realtime voice WebSocket error", error=str(exc))
+        logfire.warn("Realtime voice WebSocket error", error=str(exc))

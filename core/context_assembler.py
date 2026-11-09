@@ -172,7 +172,7 @@ class ContextAssembler:
                     metadata = {"node_id": node.get("node_id", "")},
                 ))
         except Exception as exc:
-            logfire.warning("ContextAssembler: graph traversal failed", error=str(exc))
+            logfire.warn("ContextAssembler: graph traversal failed", error=str(exc))
 
         # Step 4 — Sort by composite score descending
         candidates.sort(reverse=True)

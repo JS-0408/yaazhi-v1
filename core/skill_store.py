@@ -156,7 +156,7 @@ def scan_local_skill_roots(skills_dir: Path, default_skills_root: Path) -> dict[
                     installed_path=str(skill_folder),
                 )
             except Exception as exc:
-                logfire.warning("SkillManager: failed to load local skill", folder=str(skill_folder), error=str(exc))
+                logfire.warn("SkillManager: failed to load local skill", folder=str(skill_folder), error=str(exc))
     return installed
 
 
@@ -257,6 +257,6 @@ async def sync_skills_from_redis_cluster(
             )
             synced += 1
     except Exception as exc:
-        logfire.warning("SkillManager.sync_from_cluster warning", error=str(exc))
+        logfire.warn("SkillManager.sync_from_cluster warning", error=str(exc))
     return synced
 

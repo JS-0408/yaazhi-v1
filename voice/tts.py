@@ -122,7 +122,7 @@ class TTSEngine:
                     )
                     return audio_bytes
                 except Exception as exc:
-                    logfire.warning(
+                    logfire.warn(
                         "Bhashini TTS failed, falling back to Coqui",
                         language=language,
                         error=str(exc),
@@ -145,7 +145,7 @@ class TTSEngine:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
                 except OSError as exc:
-                    logfire.warning("TTS temp file cleanup failed", path=tmp_path, error=str(exc))
+                    logfire.warn("TTS temp file cleanup failed", path=tmp_path, error=str(exc))
 
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info(

@@ -100,13 +100,13 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
     try:
         recalled_context = await retriever.build_context(body.message, max_tokens=1500)
     except Exception as exc:
-        logfire.warning("Memory retrieval failed during chat", error=str(exc))
+        logfire.warn("Memory retrieval failed during chat", error=str(exc))
 
     # ── Store user message in episodic memory (before orchestrator) ───────────
     try:
         await episodic.add_message(body.session_id, "user", body.message)
     except Exception as exc:
-        logfire.warning("Episodic: failed to store user message", error=str(exc))
+        logfire.warn("Episodic: failed to store user message", error=str(exc))
 
     # ── Run orchestrator — inject context (API-2 FIX) ─────────────────────────
     try:
@@ -123,7 +123,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
     try:
         await episodic.add_message(body.session_id, "assistant", output.response)
     except Exception as exc:
-        logfire.warning("Episodic: failed to store assistant response", error=str(exc))
+        logfire.warn("Episodic: failed to store assistant response", error=str(exc))
 
     # ── Persist interaction to vector memory (Phase 2 end-to-end loop) ────────
     vector_store = getattr(state, "vector_store", None) or getattr(retriever, "_vs", None)
@@ -136,7 +136,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
                 source="chat",
             )
         except Exception as exc:
-            logfire.warning("VectorStore: failed to store chat interaction", error=str(exc))
+            logfire.warn("VectorStore: failed to store chat interaction", error=str(exc))
 
     processing_time_ms = int((time.time() - t_start) * 1000)
     logfire.info(

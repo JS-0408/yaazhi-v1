@@ -337,7 +337,7 @@ def parse_skill_md(content: str, fallback_name: str = "github-skill") -> tuple[s
                     if isinstance(meta.get("tags"), list):
                         tags = [str(t) for t in meta["tags"]]
             except Exception as exc:
-                logfire.warning("parse_skill_md: YAML frontmatter warning", error=str(exc))
+                logfire.warn("parse_skill_md: YAML frontmatter warning", error=str(exc))
     return sanitize_skill_name(name), description, tags, body
 
 

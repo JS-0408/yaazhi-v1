@@ -28,6 +28,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _configure_windows_output() -> None:
+    """Keep structured logs printable on Windows regardless of the console code page."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.4)
@@ -35,7 +43,15 @@ def _is_port_open(host: str, port: int) -> bool:
 
 
 def main() -> None:
+    _configure_windows_output()
     from config.settings import settings
+
+    if _is_port_open("127.0.0.1", settings.app_port):
+        print(
+            f"[8GB Local Mode] Yaazhi is already running at "
+            f"http://127.0.0.1:{settings.app_port}; reusing the existing process."
+        )
+        return
 
     is_local_redis = "127.0.0.1" in settings.redis_url or "localhost" in settings.redis_url
     if is_local_redis and not _is_port_open("127.0.0.1", 6379):

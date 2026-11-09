@@ -29,15 +29,17 @@ from typing import AsyncIterator
 
 import logfire
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from prometheus_client import make_asgi_app
 
 from agents.browser import BrowserAgent
 from agents.notifier import NotifierAgent
 from api.middleware import (
     APIKeyMiddleware,
+    ContextExtractionMiddleware,
     RateLimitMiddleware,
     RequestLoggingMiddleware,
     TimingMiddleware,
@@ -144,11 +146,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         await app.state.skill_manager.sync_from_cluster()
     except Exception as exc:
-        logfire.warning("SkillManager cluster sync skipped at startup", error=str(exc))
+        logfire.warn("SkillManager cluster sync skipped at startup", error=str(exc))
     try:
         await vs.drain_pending()
     except Exception as exc:
-        logfire.warning("VectorStore drain_pending skipped at startup", error=str(exc))
+        logfire.warn("VectorStore drain_pending skipped at startup", error=str(exc))
     app.state.ping_results = ping_results
 
     logfire.info("Yaazhi API startup complete", node_id=settings.node_id, healthy=sum(ping_results.values()))
@@ -161,15 +163,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await yaazhi.close()
         except Exception as exc:
-            logfire.warning("Yaazhi close error during shutdown", error=str(exc))
+            logfire.warn("Yaazhi close error during shutdown", error=str(exc))
     try:
         await browser.close()
     except Exception as exc:
-        logfire.warning("Browser close error during shutdown", error=str(exc))
+        logfire.warn("Browser close error during shutdown", error=str(exc))
     try:
         await vs.close()
     except Exception as exc:
-        logfire.warning("VectorStore close error", error=str(exc))
+        logfire.warn("VectorStore close error", error=str(exc))
     logfire.info("Yaazhi API shutdown complete")
 
 
@@ -204,6 +206,7 @@ app.add_middleware(APIKeyMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(TimingMiddleware)
+app.add_middleware(ContextExtractionMiddleware)
 
 # ── Routers ────────────────────────────────────────────────────────────────────
 app.include_router(chat_router, prefix="/api/v1")
@@ -228,6 +231,15 @@ async def voice_console() -> HTMLResponse:
     return HTMLResponse(content="<h1>Yaazhi V4 Voice Console not found</h1>", status_code=404)
 
 
+@app.get("/ui/console.css", include_in_schema=False)
+async def console_stylesheet() -> FileResponse:
+    """Serve the console stylesheet locally so the UI has no CDN dependency."""
+    css_path = Path(__file__).resolve().parent.parent / "ui" / "console.css"
+    if not css_path.exists():
+        raise HTTPException(status_code=404, detail="Console stylesheet not found")
+    return FileResponse(css_path, media_type="text/css")
+
+
 @app.get("/health", tags=["ops"], summary="System health check")
 async def health() -> dict:
     """
@@ -246,6 +258,24 @@ async def health() -> dict:
         "uptime_seconds": uptime,
         "version": settings.app_version,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/ready", tags=["ops"], summary="Core readiness check")
+async def readiness() -> dict:
+    """Report whether the required brain services can accept requests."""
+    ping_results: dict[str, bool] = getattr(app.state, "ping_results", {})
+    required = ("vector_store", "episodic", "preferences", "retriever", "stt", "tts", "yaazhi")
+    missing = [name for name in required if not ping_results.get(name, False)]
+    return {
+        "ready": not missing,
+        "required_services": {name: ping_results.get(name, False) for name in required},
+        "missing": missing,
+        "optional_services": {
+            "browser": ping_results.get("browser", False),
+            "notifier": ping_results.get("notifier", False),
+        },
+        "version": settings.app_version,
     }
 
 

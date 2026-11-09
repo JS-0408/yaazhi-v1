@@ -100,7 +100,7 @@ class ResearcherAgent:
                 await self._redis.ping()
                 logfire.debug("ResearcherAgent connected to Redis")
             except Exception as exc:
-                logfire.warning("ResearcherAgent Redis unavailable, caching disabled", error=str(exc))
+                logfire.warn("ResearcherAgent Redis unavailable, caching disabled", error=str(exc))
                 self._redis = None
 
     async def ping(self) -> bool:
@@ -120,7 +120,7 @@ class ResearcherAgent:
             )
             return bool(response.choices[0].message.content)
         except Exception as exc:
-            logfire.warning("ResearcherAgent ping failed", error=str(exc))
+            logfire.warn("ResearcherAgent ping failed", error=str(exc))
             return False
 
     async def _get_http_client(self) -> httpx.AsyncClient:
@@ -241,14 +241,14 @@ class ResearcherAgent:
             from agents.browser import validate_url
             safe, reason = validate_url(url)
             if not safe:
-                logfire.warning(
+                logfire.warn(
                     "ResearcherAgent.deep_fetch SSRF blocked",
                     url=url[:80],
                     reason=reason,
                 )
                 return f"[URL blocked by SSRF filter: {reason}]"
         except ImportError:
-            logfire.warning("ResearcherAgent: BrowserAgent validate_url not available, skipping SSRF check")
+            logfire.warn("ResearcherAgent: BrowserAgent validate_url not available, skipping SSRF check")
 
         cache_key = self._cache_key(f"fetch:{url}")
         cached = await self._get_cached(cache_key)
@@ -263,10 +263,10 @@ class ResearcherAgent:
             response = await client.get(url, timeout=20.0)
             response.raise_for_status()
         except httpx.TimeoutException as exc:
-            logfire.warning("URL fetch timeout", url=url[:60], error=str(exc))
+            logfire.warn("URL fetch timeout", url=url[:60], error=str(exc))
             return f"[Fetch timeout for {url}]"
         except httpx.HTTPStatusError as exc:
-            logfire.warning("URL fetch HTTP error", url=url[:60], status=exc.response.status_code)
+            logfire.warn("URL fetch HTTP error", url=url[:60], status=exc.response.status_code)
             return f"[HTTP {exc.response.status_code} for {url}]"
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -360,12 +360,10 @@ class ResearcherAgent:
                     raw_content = "\n\n".join([r.get("body", "") for r in search_results])
 
         except RuntimeError as exc:
-            logfire.error("Research search phase failed", error=str(exc))
-            return DocumentResult(
-                summary=f"Research failed: {exc}",
-                key_facts=[],
-                sources=[],
-                confidence_score=0.0,
+            logfire.warn("Research search phase failed; summarizing fallback context", error=str(exc))
+            raw_content = (
+                f"Web search was unavailable for this request. "
+                f"Use the topic itself and state this limitation clearly: {topic}"
             )
 
         summary: str = ""
@@ -376,7 +374,7 @@ class ResearcherAgent:
                 model_used = model
                 break
             except Exception as exc:
-                logfire.warning(f"Summarization failed on {label} model", model=model, error=str(exc))
+                logfire.warn(f"Summarization failed on {label} model", model=model, error=str(exc))
                 if label == "fallback":
                     summary = raw_content[:500] + "..." if len(raw_content) > 500 else raw_content
 

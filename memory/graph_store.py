@@ -84,10 +84,10 @@ class GraphStore:
         if self._driver is not None:
             return self._driver
         if not _NEO4J_AVAILABLE:
-            logfire.warning("GraphStore: neo4j driver not installed — skipping graph ops")
+            logfire.warn("GraphStore: neo4j driver not installed — skipping graph ops")
             return None
         if not self._password:
-            logfire.warning("GraphStore: NEO4J_PASSWORD not set — graph ops disabled")
+            logfire.warn("GraphStore: NEO4J_PASSWORD not set — graph ops disabled")
             return None
         try:
             self._driver = AsyncGraphDatabase.driver(
@@ -359,7 +359,7 @@ class GraphStore:
                 return records
         except Exception as exc:
             # APOC may not be installed — fall back to simple 1-hop match
-            logfire.warning("GraphStore.traverse (APOC fallback)", error=str(exc))
+            logfire.warn("GraphStore.traverse (APOC fallback)", error=str(exc))
             return await self._simple_traverse(concept, tinai, limit)
 
     async def _simple_traverse(

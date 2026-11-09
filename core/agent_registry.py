@@ -41,7 +41,7 @@ class AgentRegistry:
         """
         def decorator(agent_class: type) -> type:
             if name in cls._agents:
-                logfire.warning(
+                logfire.warn(
                     "AgentRegistry: overwriting existing registration",
                     name=name,
                     old=cls._agents[name].__name__,

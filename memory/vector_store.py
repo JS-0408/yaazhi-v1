@@ -154,7 +154,7 @@ class VectorStore:
                 )
                 logfire.info("VectorStore: Mem0 initialised successfully")
             except Exception as exc:
-                logfire.warning("Mem0 init failed, falling back to raw ChromaDB", error=str(exc))
+                logfire.warn("Mem0 init failed, falling back to raw ChromaDB", error=str(exc))
                 self._use_mem0 = False
 
         # Raw ChromaDB path (fallback from Mem0 or primary if Mem0 unavailable)
@@ -171,7 +171,7 @@ class VectorStore:
                     metadata={"hnsw:space": "cosine"},
                 )
             except Exception as exc:
-                logfire.warning("ChromaDB unavailable, switching to pgvector", error=str(exc))
+                logfire.warn("ChromaDB unavailable, switching to pgvector", error=str(exc))
                 self._use_chroma = False
 
         # pgvector pool (guarded by RetryGate + connect timeout so a down PG does not stall every call)
@@ -241,7 +241,7 @@ class VectorStore:
                 if cached:
                     return json.loads(cached)
             except Exception as exc:
-                logfire.warning("Redis embed cache get failed, proceeding without cache", error=str(exc))
+                logfire.warn("Redis embed cache get failed, proceeding without cache", error=str(exc))
 
         payload = {"model": "nomic-embed-text", "prompt": text}
         try:
@@ -255,7 +255,7 @@ class VectorStore:
             embedding: list[float] = resp.json()["embedding"]
             self._last_embed_degraded = False
         except Exception as exc:
-            logfire.warning("Ollama embedding service unavailable, using deterministic fallback", error=str(exc))
+            logfire.warn("Ollama embedding service unavailable, using deterministic fallback", error=str(exc))
             self._last_embed_degraded = True
             raw_hash = hashlib.sha256(text.encode("utf-8")).digest()
             embedding = [(b / 255.0) for b in (raw_hash * 24)[:768]]
@@ -267,7 +267,7 @@ class VectorStore:
             try:
                 await self._redis.set(cache_key, json.dumps(embedding), ex=86400)
             except Exception as exc:
-                logfire.warning("Redis embed cache set failed", error=str(exc))
+                logfire.warn("Redis embed cache set failed", error=str(exc))
 
         return embedding
 
@@ -318,7 +318,12 @@ class VectorStore:
                 continue
             content = entry.get("content", "")
             overlap_score = self._simple_query_score(content, query_lower)
-            score = overlap_score if overlap_score > 0.0 else 0.1
+            # Do not return unrelated memories with an artificial positive
+            # score. That caused every old chat transcript to be injected into
+            # new prompts, making answers appear random and contradictory.
+            if overlap_score <= 0.0:
+                continue
+            score = overlap_score
             results.append(
                 MemoryResult(
                     memory_id=entry["memory_id"],
@@ -404,7 +409,7 @@ class VectorStore:
                 await self._post_add_index(memory_id)
                 return memory_id
             except Exception as exc:
-                logfire.warning("Mem0 add failed, falling back to ChromaDB", error=str(exc))
+                logfire.warn("Mem0 add failed, falling back to ChromaDB", error=str(exc))
                 self._use_mem0 = False
 
         # ── Raw ChromaDB path ──────────────────────────────────────────────
@@ -437,7 +442,7 @@ class VectorStore:
                 await self._post_add_index(memory_id)
                 return memory_id
             except Exception as exc:
-                logfire.warning("ChromaDB add failed, switching to pgvector", error=str(exc))
+                logfire.warn("ChromaDB add failed, switching to pgvector", error=str(exc))
                 self._use_chroma = False
                 self._chroma_client = None
                 self._chroma_collection = None
@@ -469,7 +474,7 @@ class VectorStore:
                 return memory_id
             except Exception as exc:
                 self._pg_gate.record_failure()
-                logfire.warning("pgvector add failed, falling back to in-memory + pending queue", error=str(exc))
+                logfire.warn("pgvector add failed, falling back to in-memory + pending queue", error=str(exc))
                 if not self._last_embed_degraded:
                     await self._pending_queue.enqueue(
                         {
@@ -551,7 +556,7 @@ class VectorStore:
                     continue
                 except Exception as exc:
                     self._pg_gate.record_failure()
-                    logfire.warning("VectorStore.drain_pending PG write failed", error=str(exc))
+                    logfire.warn("VectorStore.drain_pending PG write failed", error=str(exc))
                     await self._pending_queue.enqueue(item)
                     break
             drained += 1
@@ -628,7 +633,7 @@ class VectorStore:
                 logfire.info("VectorStore.search success (Mem0)", results=len(results), duration_ms=duration_ms, user_id=uid)
                 return results
             except Exception as exc:
-                logfire.warning("Mem0 search failed, falling back to ChromaDB", error=str(exc))
+                logfire.warn("Mem0 search failed, falling back to ChromaDB", error=str(exc))
                 self._use_mem0 = False
 
         # ── Raw ChromaDB path ──────────────────────────────────────────────
@@ -674,7 +679,7 @@ class VectorStore:
                         )
                     )
             except Exception as exc:
-                logfire.warning("ChromaDB search failed, switching to pgvector", error=str(exc))
+                logfire.warn("ChromaDB search failed, switching to pgvector", error=str(exc))
                 self._use_chroma = False
 
         # ── pgvector fallback ──────────────────────────────────────────────
@@ -712,7 +717,7 @@ class VectorStore:
                             )
                 except Exception as exc:
                     self._pg_gate.record_failure()
-                    logfire.warning("pgvector search failed, falling back to in-memory search", error=str(exc))
+                    logfire.warn("pgvector search failed, falling back to in-memory search", error=str(exc))
                     if self._fallback_memory is not None:
                         results = self._search_fallback_memory(query, top_k, filter, uid, agent_id)
             elif self._fallback_memory is not None:
@@ -878,7 +883,7 @@ class VectorStore:
         try:
             await self._retriever.index_memory(memory_id)
         except Exception as exc:
-            logfire.warning("VectorStore._post_add_index failed", memory_id=memory_id[:8], error=str(exc))
+            logfire.warn("VectorStore._post_add_index failed", memory_id=memory_id[:8], error=str(exc))
 
     # ------------------------------------------------------------------
     # close

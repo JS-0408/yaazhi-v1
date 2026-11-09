@@ -82,7 +82,7 @@ class WakeWordListener:
                 logfire.info("WakeWordListener: using custom model", path=str(p))
                 return str(p)
             # V6 FIX: explicit warning, not silent fallback
-            logfire.warning(
+            logfire.warn(
                 "WakeWordListener: custom ONNX model not found — "
                 "falling back to built-in 'hey_jarvis' model. "
                 "Custom wake word 'Hey Yaazhi' is NOT active.",
@@ -196,7 +196,7 @@ class WakeWordListener:
             if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(self._on_wake(), self._loop)
             else:
-                logfire.warning("WakeWordListener: no running loop to dispatch async callback")
+                logfire.warn("WakeWordListener: no running loop to dispatch async callback")
         else:
             try:
                 self._on_wake()
@@ -214,7 +214,7 @@ class WakeWordListener:
         V5 FIX: Stores running loop reference obtained via get_running_loop().
         """
         if self._running:
-            logfire.warning("WakeWordListener.start: already running")
+            logfire.warn("WakeWordListener.start: already running")
             return
 
         # V5 FIX: correct way to get the running loop

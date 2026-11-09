@@ -110,10 +110,10 @@ class YaazhiCostCallback(litellm.CustomLogger):  # type: ignore[misc]
                 await self._fire_budget_alert(daily_total)
 
         except Exception as exc:
-            logfire.warning("CostTracker._store_cost_async failed", error=str(exc))
+            logfire.warn("CostTracker._store_cost_async failed", error=str(exc))
 
     async def _fire_budget_alert(self, daily_total: float) -> None:
-        logfire.warning(
+        logfire.warn(
             "BUDGET ALERT: daily LLM spend exceeded threshold",
             daily_total_usd=round(daily_total, 4),
             threshold_usd=settings.daily_budget_usd,

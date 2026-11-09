@@ -106,7 +106,7 @@ class ReflectionAgent:
             suggestion = " | ".join(c[2] for c in valid_critiques)
             
         except Exception as exc:
-            logfire.warning("ReflectionAgent: Multi-critic reflection failed", error=str(exc))
+            logfire.warn("ReflectionAgent: Multi-critic reflection failed", error=str(exc))
             what_worked = "N/A"
             what_failed = "Reflection LLMs unavailable"
             suggestion = "Retry with primary model"
@@ -144,7 +144,7 @@ class ReflectionAgent:
             )
             logfire.info("ReflectionAgent: stored multi-critic reflection", agent=agent_name)
         except Exception as exc:
-            logfire.warning("ReflectionAgent: failed to store reflection", error=str(exc))
+            logfire.warn("ReflectionAgent: failed to store reflection", error=str(exc))
 
         if reviewer_score < 0.5 or (not success and elapsed > 30):
             await self._update_model_weight(agent_name, delta=-0.05)
@@ -212,7 +212,7 @@ class ReflectionAgent:
             lines = [f"[Past lesson {i+1}]: {r.text[:300]}" for i, r in enumerate(results)]
             return "\n".join(lines)
         except Exception as exc:
-            logfire.warning("ReflectionAgent.get_relevant_reflections failed", error=str(exc))
+            logfire.warn("ReflectionAgent.get_relevant_reflections failed", error=str(exc))
             return ""
 
     async def _update_model_weight(self, agent_name: str, delta: float) -> None:
@@ -250,6 +250,6 @@ class ReflectionAgent:
                     delta=delta,
                 )
             except Exception as exc:
-                logfire.warning(
+                logfire.warn(
                     "ReflectionAgent._update_model_weight failed", error=str(exc)
                 )

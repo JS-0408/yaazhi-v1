@@ -60,7 +60,7 @@ class NotifierAgent:
             response = await client.get(f"{base}/healthz", timeout=5.0)
             return response.status_code < 500
         except Exception as exc:
-            logfire.warning("NotifierAgent ping failed", error=str(exc))
+            logfire.warn("NotifierAgent ping failed", error=str(exc))
             return False
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -109,16 +109,16 @@ class NotifierAgent:
                     )
                     return True
 
-                logfire.warning(
+                logfire.warn(
                     f"{operation} got non-2xx response",
                     status=response.status_code,
                     attempt=attempt,
                 )
 
             except httpx.TimeoutException as exc:
-                logfire.warning(f"{operation} timeout", attempt=attempt, error=str(exc))
+                logfire.warn(f"{operation} timeout", attempt=attempt, error=str(exc))
             except httpx.ConnectError as exc:
-                logfire.warning(f"{operation} connection error", attempt=attempt, error=str(exc))
+                logfire.warn(f"{operation} connection error", attempt=attempt, error=str(exc))
             except Exception as exc:
                 logfire.error(f"{operation} unexpected error", attempt=attempt, error=str(exc))
 
@@ -194,7 +194,7 @@ class NotifierAgent:
         logfire.info("NotifierAgent.send_telegram", message_length=len(message))
 
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
-            logfire.warning("Telegram not configured, skipping send")
+            logfire.warn("Telegram not configured, skipping send")
             return False
 
         url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
@@ -211,9 +211,9 @@ class NotifierAgent:
                 if response.status_code == 200:
                     logfire.info("Telegram message sent", attempt=attempt)
                     return True
-                logfire.warning("Telegram non-200", status=response.status_code, attempt=attempt)
+                logfire.warn("Telegram non-200", status=response.status_code, attempt=attempt)
             except Exception as exc:
-                logfire.warning("Telegram send error", attempt=attempt, error=str(exc))
+                logfire.warn("Telegram send error", attempt=attempt, error=str(exc))
             if attempt < self._max_retries:
                 await asyncio.sleep(2.0 ** attempt)
 
@@ -295,7 +295,7 @@ class NotifierAgent:
         the requests.Response or None on failure.
         """
         if not self.webhook_url:
-            logfire.warning("NotifierAgent.notify called without webhook_url configured")
+            logfire.warn("NotifierAgent.notify called without webhook_url configured")
             return None
         payload = {"title": title, "body": body, "channel": channel}
         try:

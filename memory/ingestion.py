@@ -452,7 +452,7 @@ class DocumentIngester:
         )
         folder = Path(folder_path)
         if not folder.exists():
-            logfire.warning("Folder does not exist, creating", path=folder_path)
+            logfire.warn("Folder does not exist, creating", path=folder_path)
             folder.mkdir(parents=True, exist_ok=True)
 
         results: list[IngestResult] = []

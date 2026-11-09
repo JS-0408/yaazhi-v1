@@ -100,7 +100,7 @@ async def fetch_skill(request: Request, body: FetchSkillRequest) -> dict[str, An
             skill_name_override=body.skill_name,
         )
     except GuardrailViolation as exc:
-        logfire.warning("Skill fetch blocked by guardrail", error=str(exc))
+        logfire.warn("Skill fetch blocked by guardrail", error=str(exc))
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

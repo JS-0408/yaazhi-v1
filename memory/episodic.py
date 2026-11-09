@@ -53,7 +53,7 @@ class EpisodicMemory:
                     settings.redis_url, encoding="utf-8", decode_responses=True
                 )
             except Exception as exc:
-                logfire.warning("EpisodicMemory: Redis client creation failed", error=str(exc))
+                logfire.warn("EpisodicMemory: Redis client creation failed", error=str(exc))
 
     async def _ensure_pg(self) -> None:
         if self._pg_pool is None and settings.postgres_url and self._pg_gate.ready():
@@ -68,7 +68,7 @@ class EpisodicMemory:
                 self._pg_gate.reset()
             except Exception as exc:
                 self._pg_gate.record_failure()
-                logfire.warning("EpisodicMemory: PostgreSQL pool failed", error=str(exc))
+                logfire.warn("EpisodicMemory: PostgreSQL pool failed", error=str(exc))
 
     async def ping(self) -> bool:
         try:
@@ -130,7 +130,7 @@ class EpisodicMemory:
                 await pipe.execute()
                 redis_ok = True
             except Exception as exc:
-                logfire.warning("EpisodicMemory.add_message: Redis write failed, using fallback", error=str(exc))
+                logfire.warn("EpisodicMemory.add_message: Redis write failed, using fallback", error=str(exc))
 
         if not redis_ok:
             bucket = self._fallback_sessions.setdefault(redis_key, [])
@@ -155,7 +155,7 @@ class EpisodicMemory:
                     )
             except Exception as exc:
                 self._pg_gate.record_failure()
-                logfire.warning("EpisodicMemory: PG write failed (non-fatal)", error=str(exc))
+                logfire.warn("EpisodicMemory: PG write failed (non-fatal)", error=str(exc))
 
     # ------------------------------------------------------------------
     # get_history
@@ -189,7 +189,7 @@ class EpisodicMemory:
                 if raw_msgs:
                     return [json.loads(m) for m in raw_msgs]
             except Exception as exc:
-                logfire.warning("EpisodicMemory.get_history: Redis read failed, falling back to PG", error=str(exc))
+                logfire.warn("EpisodicMemory.get_history: Redis read failed, falling back to PG", error=str(exc))
 
         # PG fallback
         if self._pg_pool:
@@ -210,7 +210,7 @@ class EpisodicMemory:
                         return [dict(r) for r in reversed(rows)]
             except Exception as exc:
                 self._pg_gate.record_failure()
-                logfire.warning("EpisodicMemory.get_history PG failed", error=str(exc))
+                logfire.warn("EpisodicMemory.get_history PG failed", error=str(exc))
 
         # In-memory fallback
         fallback_msgs = self._fallback_sessions.get(redis_key, [])
@@ -236,7 +236,7 @@ class EpisodicMemory:
             try:
                 await self._redis.delete(redis_key)
             except Exception as exc:
-                logfire.warning("EpisodicMemory.clear_session Redis delete failed", error=str(exc))
+                logfire.warn("EpisodicMemory.clear_session Redis delete failed", error=str(exc))
         logfire.info("EpisodicMemory: session cleared", session_id=session_id[:8], user_id=user_id)
 
     # ------------------------------------------------------------------
@@ -270,7 +270,7 @@ class EpisodicMemory:
             )
             summary = resp.choices[0].message.content or ""
         except Exception as exc:
-            logfire.warning("EpisodicMemory.summarize_session LLM failed", error=str(exc))
+            logfire.warn("EpisodicMemory.summarize_session LLM failed", error=str(exc))
             summary = text[:500]
 
         await self._ensure_redis()
@@ -279,7 +279,7 @@ class EpisodicMemory:
             try:
                 await self._redis.set(summary_key, summary, ex=self._SESSION_TTL)
             except Exception as exc:
-                logfire.warning("EpisodicMemory.summarize_session Redis cache failed", error=str(exc))
+                logfire.warn("EpisodicMemory.summarize_session Redis cache failed", error=str(exc))
         return summary
 
     # ------------------------------------------------------------------
@@ -295,7 +295,7 @@ class EpisodicMemory:
             try:
                 await self._redis.set(pref_key, value)
             except Exception as exc:
-                logfire.warning("EpisodicMemory.set_preference Redis failed", error=str(exc))
+                logfire.warn("EpisodicMemory.set_preference Redis failed", error=str(exc))
 
     async def get_preference(self, key: str, default: str = "", user_id: Optional[str] = None) -> str:
         uid = user_id or settings.default_user_id
@@ -307,7 +307,7 @@ class EpisodicMemory:
                 if val is not None:
                     return val
             except Exception as exc:
-                logfire.warning("EpisodicMemory.get_preference Redis failed", error=str(exc))
+                logfire.warn("EpisodicMemory.get_preference Redis failed", error=str(exc))
         return self._fallback_prefs.get(pref_key, default)
 
     async def close(self) -> None:

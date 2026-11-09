@@ -89,7 +89,7 @@ class SemanticRetriever:
             try:
                 cached_raw = await self._redis.get(cache_key)
             except Exception as exc:
-                logfire.warning("SemanticRetriever.retrieve: Redis get failed, proceeding to live search", error=str(exc))
+                logfire.warn("SemanticRetriever.retrieve: Redis get failed, proceeding to live search", error=str(exc))
         if cached_raw:
             try:
                 cached_data = json.loads(cached_raw)
@@ -105,7 +105,7 @@ class SemanticRetriever:
             serializable = [r.model_dump(mode="json") for r in results]
             await self._redis.set(cache_key, json.dumps(serializable, ensure_ascii=False), ex=self._retrieval_ttl)
         except Exception as exc:
-            logfire.warning("SemanticRetriever: failed to cache results", error=str(exc))
+            logfire.warn("SemanticRetriever: failed to cache results", error=str(exc))
 
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("SemanticRetriever.retrieve success", results=len(results), duration_ms=duration_ms)
@@ -160,7 +160,7 @@ class SemanticRetriever:
                 candidates[i] for i in indices if 0 <= i < len(candidates)
             ][:rerank_to]
         except Exception as exc:
-            logfire.warning("Reranking failed, returning top candidates", error=str(exc))
+            logfire.warn("Reranking failed, returning top candidates", error=str(exc))
             reranked = candidates[:rerank_to]
 
         duration_ms = int((time.time() - t_start) * 1000)
@@ -205,7 +205,14 @@ class SemanticRetriever:
 
         lines: list[str] = []
         for i, mem in enumerate(results, start=1):
-            lines.append(f"{i}. [{mem.source}]: {mem.text}")
+            # Retrieved memories are evidence, not instructions. Delimit each
+            # item so transcript-like memories cannot become part of the
+            # assistant's conversational role.
+            lines.append(
+                f"<memory index=\"{i}\" source=\"{mem.source}\">\n"
+                f"{mem.text}\n"
+                "</memory>"
+            )
 
         context = "\n".join(lines)
         tokens = await asyncio.to_thread(self._tokenizer.encode, context)
@@ -236,7 +243,7 @@ class SemanticRetriever:
         try:
             await self._redis.zadd(_MEMORY_INDEX_KEY, {memory_id: score})
         except Exception as exc:
-            logfire.warning("SemanticRetriever.index_memory failed", error=str(exc))
+            logfire.warn("SemanticRetriever.index_memory failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # hybrid_search — M5 fix: bounded SCAN + sorted-set index
@@ -320,7 +327,7 @@ class SemanticRetriever:
                     if cursor == 0:
                         break
             except Exception as exc:
-                logfire.warning("SemanticRetriever.hybrid_search: Redis scan failed", error=str(exc))
+                logfire.warn("SemanticRetriever.hybrid_search: Redis scan failed", error=str(exc))
 
         merged.extend(keyword_hits)
         merged.sort(key=lambda r: r.score, reverse=True)
