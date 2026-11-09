@@ -65,6 +65,7 @@ RUN mkdir -p \
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
+    ENV=production \
     YAAZHI_ENV=production \
     API_HOST=0.0.0.0 \
     API_PORT=8000

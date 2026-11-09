@@ -116,6 +116,10 @@ class Planner:
     def __init__(self) -> None:
         self._system_prompt: Optional[str] = None
 
+    async def ping(self) -> bool:
+        """Health check for Planner readiness."""
+        return bool(settings.groq_api_key or settings.nvidia_api_key or settings.google_api_key or settings.azure_openai_api_key)
+
     def _get_system_prompt(self) -> str:
         if self._system_prompt is None:
             self._system_prompt = _build_system_prompt()

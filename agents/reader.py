@@ -177,9 +177,15 @@ class ReaderAgent:
             raise ValueError(f"File is not a PDF: {file_path}")
 
         try:
-            import PyPDF2
-        except ImportError as exc:
-            raise RuntimeError("PyPDF2 not installed: pip install PyPDF2") from exc
+            from pypdf import PdfReader as _PdfReader
+            from pypdf.errors import PdfReadError as _PdfReadError
+        except ImportError:
+            try:
+                import PyPDF2  # type: ignore
+                _PdfReader = PyPDF2.PdfReader
+                _PdfReadError = PyPDF2.errors.PdfReadError
+            except ImportError as exc:
+                raise RuntimeError("pypdf not installed: pip install pypdf") from exc
 
         # Extract text from all pages
         try:
@@ -187,7 +193,7 @@ class ReaderAgent:
             page_count: int = 0
 
             with safe_path.open("rb") as fh:
-                reader = PyPDF2.PdfReader(fh)
+                reader = _PdfReader(fh)
                 page_count = len(reader.pages)
                 for page_num, page in enumerate(reader.pages[:500]):  # Hard limit 500 pages
                     try:
@@ -197,7 +203,7 @@ class ReaderAgent:
                     except Exception as exc:
                         logfire.warning("Page extraction failed", page=page_num + 1, error=str(exc))
 
-        except PyPDF2.errors.PdfReadError as exc:
+        except _PdfReadError as exc:
             raise RuntimeError(f"PDF is corrupted or encrypted: {exc}") from exc
 
         if not all_text:
@@ -267,9 +273,13 @@ class ReaderAgent:
         text = ""
         try:
             import io
-            import PyPDF2
+            try:
+                from pypdf import PdfReader as _BytesPdfReader
+            except ImportError:
+                import PyPDF2  # type: ignore
+                _BytesPdfReader = PyPDF2.PdfReader
 
-            reader = PyPDF2.PdfReader(io.BytesIO(data))
+            reader = _BytesPdfReader(io.BytesIO(data))
             pages = []
             for page in reader.pages:
                 pages.append(page.extract_text() or "")

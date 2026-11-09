@@ -57,9 +57,13 @@ class YaazhiV4(Yaazhi):
         super().__init__()
         self.router = CognitiveRouter()
         self.uriporul_sm = uriporul_sm
+        if vector_store is not None:
+            self.memory = vector_store
         vs = vector_store or getattr(self, "memory", None)
         self.v4_retriever = retriever or SemanticRetriever(vs)
+        self.retriever = self.v4_retriever
         self.v4_retriever.attach()
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
         logfire.info("YaazhiV4 orchestrator ready")
 
     def __repr__(self) -> str:
@@ -173,9 +177,9 @@ class YaazhiV4(Yaazhi):
                 memories_used=0,
             )
 
-        # ── Step 5: Async Reflection (fire-and-forget) ────────────────
+        # ── Step 5: Async Reflection (tracked for graceful VPS shutdown) ──
         session_outputs = final_state.get("agent_outputs", {})
-        asyncio.create_task(
+        bg_task = asyncio.create_task(
             reflection_pipeline.run(
                 session_outputs = session_outputs,
                 tinai           = route.tinai,
@@ -184,6 +188,8 @@ class YaazhiV4(Yaazhi):
                 session_id      = session_id,
             )
         )
+        self._bg_tasks.add(bg_task)
+        bg_task.add_done_callback(self._bg_tasks.discard)
         logfire.info("V4.run: Step5 reflection task queued")
 
         # ── Final output assembly ─────────────────────────────────────
@@ -210,3 +216,9 @@ class YaazhiV4(Yaazhi):
             detected_language="en",
             memories_used=0,
         )
+
+    async def close(self) -> None:
+        """Drain in-flight reflection tasks on graceful VPS container shutdown."""
+        if self._bg_tasks:
+            await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
+            self._bg_tasks.clear()

@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS episodic_events (
     event_type       VARCHAR(50),
     summary          TEXT,
     context_payload  JSONB                                DEFAULT '{}',
-    embedding        vector(1536)  -- null until reflection pipeline runs
+    embedding        vector(768)   -- matches nomic-embed-text (768-dim); null until reflection pipeline runs
 );
 
 -- ── Decisions Ledger (Puram Domain — Layer 6) ────────────────────────────────
@@ -85,7 +85,12 @@ CREATE INDEX IF NOT EXISTS idx_events_embedding
     WITH (m = 16, ef_construction = 64);
 
 -- ── Permissions ───────────────────────────────────────────────────────────────
-GRANT ALL PRIVILEGES ON TABLE episodic_events    TO yaazhi;
-GRANT ALL PRIVILEGES ON TABLE decisions_ledger   TO yaazhi;
-GRANT ALL PRIVILEGES ON TABLE akam_user_state    TO yaazhi;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO yaazhi;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'yaazhi') THEN
+        GRANT ALL PRIVILEGES ON TABLE episodic_events    TO yaazhi;
+        GRANT ALL PRIVILEGES ON TABLE decisions_ledger   TO yaazhi;
+        GRANT ALL PRIVILEGES ON TABLE akam_user_state    TO yaazhi;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO yaazhi;
+    END IF;
+END $$;

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -180,7 +180,20 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = Field(default="2024-02-01")
     google_api_key: str = Field(default="")
     anthropic_api_key: str = Field(default="")
+    nvidia_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("NVIDIA_NIM_API_KEY", "NVIDIA_API_KEY"),
+        description="NVIDIA NIM API key (nvapi-...)",
+    )
     ollama_base_url: str = Field(default="http://localhost:11434")
+    default_llm_model: str = Field(
+        default="",
+        description="Optional global LiteLLM model override (e.g. gemini/gemini-2.0-flash) for single-key or 8GB RAM testing",
+    )
+    low_memory_mode: bool = Field(
+        default=False,
+        description="Optimize memory footprint for <=8GB RAM laptops (tiny Whisper, lazy models, in-memory fallbacks)",
+    )
 
     # ── Memory (primary backend controlled by VECTOR_BACKEND) ──────────────
     # REQUIRED: declare which backend is primary (pgvector | chromadb | mem0)
@@ -245,6 +258,11 @@ class Settings(BaseSettings):
     log_dir: str = Field(default="logs")
     # SEC-9 fix: not hardcoded — read from env or default to 'default'
     default_user_id: str = Field(default="default", description="Default user namespace for memory ops")
+    node_id: str = Field(
+        default_factory=lambda: os.getenv("YAAZHI_NODE_ID") or os.getenv("HOSTNAME") or "vps-node-1",
+        validation_alias=AliasChoices("YAAZHI_NODE_ID", "NODE_ID"),
+        description="Unique VPS / container node identifier for multi-VPS deployments",
+    )
     uploads_path: str = Field(default="/tmp/yaazhi_uploads", description="Directory for uploaded files")
     daily_budget_usd: float = Field(default=1.0, description="Daily LLM spend alert threshold in USD")
     # chroma_persist_path duplicated from MemorySettings for backwards compat
@@ -315,6 +333,51 @@ class Settings(BaseSettings):
                 f"Copy config/.env.example to config/.env and fill in the values."
             )
 
+    def _resolve_available_model(self, candidate: str, task_type: str) -> str:
+        """
+        Ensure provider API keys are exported to os.environ for LiteLLM, and
+        automatically route tasks whose configured provider key is unset to an
+        active configured provider (Groq -> NVIDIA NIM -> Gemini).
+        """
+        if self.groq_api_key:
+            os.environ.setdefault("GROQ_API_KEY", self.groq_api_key)
+        if self.nvidia_api_key:
+            os.environ.setdefault("NVIDIA_NIM_API_KEY", self.nvidia_api_key)
+        if self.google_api_key:
+            os.environ.setdefault("GOOGLE_API_KEY", self.google_api_key)
+            os.environ.setdefault("GEMINI_API_KEY", self.google_api_key)
+
+        if task_type == "embed":
+            return candidate
+
+        if self.default_llm_model.strip() and not os.getenv("PYTEST_CURRENT_TEST"):
+            return self.default_llm_model.strip()
+
+        if not os.getenv("PYTEST_CURRENT_TEST"):
+            fallback_live = (
+                "groq/qwen/qwen3.8-27b"
+                if self.groq_api_key
+                else (
+                    "nvidia_nim/deepseek-ai/deepseek-v4.1-flash"
+                    if self.nvidia_api_key
+                    else ("gemini/gemini-1.5-flash" if self.google_api_key else "")
+                )
+            )
+            if fallback_live:
+                if candidate in ("groq/llama-3.3-70b-versatile", "groq/llama-3.1-8b-instant") and self.groq_api_key:
+                    return "groq/qwen/qwen3.8-27b"
+                if candidate.startswith("groq/") and not self.groq_api_key:
+                    return fallback_live
+                if candidate.startswith("anthropic/") and not self.anthropic_api_key:
+                    return fallback_live
+                if candidate.startswith("azure/") and not self.azure_openai_api_key:
+                    return fallback_live
+                if candidate.startswith("gemini/") and (
+                    not self.google_api_key or self.google_api_key.startswith("AQ.")
+                ):
+                    return fallback_live
+        return candidate
+
     def get_litellm_model(self, task_type: str) -> str:
         """
         Return the correct LiteLLM model string for a given task type.
@@ -338,7 +401,8 @@ class Settings(BaseSettings):
         routing_rules: dict[str, str] = models_config.get("routing_rules", {})
         model_key: str = routing_rules.get(task_type, "fast_tasks")
         model_entry: dict[str, Any] = models_config.get(model_key, {})
-        return str(model_entry.get("model_string", "groq/llama-3.3-70b-versatile"))
+        candidate = str(model_entry.get("model_string", "groq/llama-3.3-70b-versatile"))
+        return self._resolve_available_model(candidate, task_type)
 
     def get_fallback_model(self, task_type: str) -> str:
         """
@@ -357,7 +421,8 @@ class Settings(BaseSettings):
         routing_rules: dict[str, str] = models_config.get("routing_rules", {})
         model_key: str = routing_rules.get(task_type, "fast_tasks")
         model_entry: dict[str, Any] = models_config.get(model_key, {})
-        return str(model_entry.get("fallback_model_string", "ollama/llama3.2"))
+        candidate = str(model_entry.get("fallback_model_string", "ollama/llama3.2"))
+        return self._resolve_available_model(candidate, task_type)
 
     # -------------------------------------------------------------------------
     # Internal helpers

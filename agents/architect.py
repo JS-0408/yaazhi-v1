@@ -434,23 +434,26 @@ class ArchitectAgent:
     # Apply (only called after YES confirmation)
     # ------------------------------------------------------------------
 
-    async def apply(self, change_id: str) -> str:
+    async def apply(self, change_id: str, session_id: str = "global") -> str:
         """
         Apply a staged change after user has typed YES.
 
         Args:
             change_id: The 8-char change ID shown in the permission request.
+            session_id: Conversation session ID used to scope staged changes.
 
         Returns:
             Human-readable success / failure report.
         """
-        change = await self._store.get(change_id)
+        change = await self._store.get(change_id, session_id=session_id)
+        if not change and session_id != "global":
+            change = await self._store.get(change_id, session_id="global")
         if not change:
             return f"❌ Change ID `{change_id}` not found or expired (24h TTL)."
         if change.applied:
             return f"⚠️ Change `{change_id}` was already applied."
         if not change.approved:
-            await self._store.mark_approved(change_id)
+            await self._store.mark_approved(change_id, session_id=session_id)
 
         logfire.info("ArchitectAgent.apply", change_id=change_id)
         results: list[str] = []
@@ -525,7 +528,7 @@ class ArchitectAgent:
                 results.append(f"❌ pip install `{pkg}` exception: {exc}")
 
         # Step 4: Mark applied
-        await self._store.mark_applied(change_id)
+        await self._store.mark_applied(change_id, session_id=session_id)
         change.applied = True
 
         report = (

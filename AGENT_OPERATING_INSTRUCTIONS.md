@@ -121,14 +121,21 @@ Ollama (local), GitHub Actions.
   Note: Mem0 and ChromaDB code paths are RETAINED — they are optional and
   accessible by setting VECTOR_BACKEND accordingly. Not removed.
 
-PHASE 2 (CURRENT PHASE — single end-to-end loop):
-  - Single path: user message → retrieve relevant memory context →
-    single agent responds → response returned → interaction persisted to
-    episodic + vector memory (via add() + retriever.attach() wiring).
-  - Integration test: write memory in one session, start a fresh session,
-    retrieve it correctly. Must pass deterministically, not "usually."
-  - Do not touch multi-agent orchestration, voice, or external integrations
-    until this phase's test is green.
+~~PHASE 2 (COMPLETE as of 2026-11-08)~~:
+  ✅ Single path: user message → retrieve relevant memory context →
+     single agent responds → response returned → interaction persisted to
+     episodic + vector memory (via add() + retriever.attach() wiring in
+     api/routes/chat.py and core/orchestrator.py).
+  ✅ Fixed Planner.plan(task=...) signature mismatch in core/orchestrator.py.
+  ✅ Fixed AkamState.to_context_block() heuristic estimate labeling in
+     memory/akam_store.py.
+  ✅ Added user_id column to yaazhi_memories in infra/init.sql.
+  ✅ Deterministic cross-session integration test added in tests/test_api.py
+     (test_phase2_end_to_end_cross_session_memory_loop) and passing.
+  ✅ Added Open-Source / GitHub Skill Manager (core/skill_manager.py,
+     api/routes/skills.py, tests/test_skills.py) with SSRF, path-traversal,
+     AST static analysis, human approval staging, and CoderAgent sandbox
+     modification/execution.
 
 PHASE 3 (capability, one vertical at a time, each with its own tests before
 the next starts):

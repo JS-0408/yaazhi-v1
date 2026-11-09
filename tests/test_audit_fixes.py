@@ -250,6 +250,9 @@ class TestCostTrackerBudgetAlert:
         callback._redis = None
 
         mock_redis = AsyncMock()
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[])
+        mock_redis.pipeline = MagicMock(return_value=mock_pipe)
         # Simulate daily total = $1.50, threshold = $1.00
         mock_redis.get = AsyncMock(return_value="1.50")
         mock_redis.incrbyfloat = AsyncMock(return_value=1.50)
@@ -258,7 +261,7 @@ class TestCostTrackerBudgetAlert:
 
         alert_fired = []
 
-        async def fake_alert(amount: float, threshold: float) -> None:
+        async def fake_alert(amount: float, threshold: float = 1.0) -> None:
             alert_fired.append((amount, threshold))
 
         with patch.object(callback, "_fire_budget_alert", side_effect=fake_alert):
@@ -290,6 +293,9 @@ class TestCostTrackerBudgetAlert:
 
         callback = YaazhiCostCallback.__new__(YaazhiCostCallback)
         mock_redis = AsyncMock()
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[])
+        mock_redis.pipeline = MagicMock(return_value=mock_pipe)
         mock_redis.get = AsyncMock(return_value="0.20")  # $0.20 of $1.00 budget
         mock_redis.incrbyfloat = AsyncMock(return_value=0.20)
         mock_redis.set = AsyncMock()
@@ -297,7 +303,7 @@ class TestCostTrackerBudgetAlert:
 
         alert_fired = []
 
-        async def fake_alert(amount: float, threshold: float) -> None:
+        async def fake_alert(amount: float, threshold: float = 1.0) -> None:
             alert_fired.append((amount, threshold))
 
         with patch.object(callback, "_fire_budget_alert", side_effect=fake_alert):

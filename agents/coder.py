@@ -537,6 +537,19 @@ class CoderAgent:
 
         return await self.execute_code(code, task_description=task, session_id=session_id)
 
+    async def code_loop(
+        self,
+        task_description: str,
+        context: str = "",
+        session_id: str = "",
+    ) -> CodeResult:
+        """Backwards-compatible alias for write_and_run used by orchestrator."""
+        return await self.write_and_run(
+            task=task_description,
+            context=context,
+            session_id=session_id,
+        )
+
     async def close(self) -> None:
         """Clean up any leftover sandbox directory."""
         if self._sandbox_dir and Path(self._sandbox_dir).exists():

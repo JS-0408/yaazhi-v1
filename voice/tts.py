@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -27,7 +28,7 @@ import logfire
 
 from config.settings import settings
 
-_VOICE_TMP_DIR = "/tmp/yaazhi_voice"
+_VOICE_TMP_DIR = os.path.join(tempfile.gettempdir(), "yaazhi_voice")
 
 _INDIAN_LANGS = frozenset(["te", "hi", "ta", "kn", "mr", "bn", "gu", "pa"])
 
@@ -154,6 +155,19 @@ class TTSEngine:
             duration_ms=duration_ms,
         )
         return audio_bytes
+
+    async def synthesise(
+        self,
+        text: str,
+        language: str = "en",
+        gender: str = "female",
+        speed: float = 1.0,
+    ) -> bytes:
+        """
+        Synthesise text to speech (API route alias for speak()).
+        """
+        _ = gender  # reserved for multi-speaker selection
+        return await self.speak(text, language=language, speed=speed)
 
     async def speak_to_file(
         self, text: str, output_path: str, language: str = "en"

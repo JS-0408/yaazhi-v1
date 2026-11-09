@@ -371,3 +371,37 @@ class BrowserAgent:
         except Exception as exc:
             logfire.error("BrowserAgent.browse_and_summarise LLM failed", error=str(exc))
             return page_text[:3000]   # fall back to raw text
+
+    async def search_web(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[dict[str, str]]:
+        """
+        Search the web or summarise a direct URL for orchestrator TaskType.BROWSE.
+        """
+        import asyncio
+        import re
+
+        url_match = re.search(r"https?://\S+", query)
+        if url_match:
+            url = url_match.group(0).rstrip(".,)")
+            summary = await self.browse_and_summarise(url=url, task=query)
+            return [{"title": url, "href": url, "snippet": summary}]
+
+        try:
+            from duckduckgo_search import DDGS
+            raw_results = await asyncio.to_thread(
+                lambda: list(DDGS().text(keywords=query, max_results=max_results))
+            )
+            return [
+                {
+                    "title": str(r.get("title", "")),
+                    "href": str(r.get("href", "")),
+                    "snippet": str(r.get("body") or r.get("snippet") or ""),
+                }
+                for r in raw_results
+            ]
+        except Exception as exc:
+            logfire.warning("BrowserAgent.search_web failed", query=query[:80], error=str(exc))
+            return []

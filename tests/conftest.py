@@ -61,6 +61,8 @@ def mock_settings(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
     monkeypatch.setenv("YAAZHI_API_KEY", "test-api-key")
     monkeypatch.setattr("config.settings.settings.yaazhi_api_key", "test-api-key", raising=False)
+    monkeypatch.setattr("config.settings.settings.postgres_url", "", raising=False)
+    monkeypatch.setattr("config.settings.settings.redis_url", "redis://localhost:6379/0", raising=False)
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("POSTGRES_URL", "")
     monkeypatch.setenv("DEFAULT_USER_ID", "test_user")
@@ -197,8 +199,17 @@ def sample_state() -> YaazhiState:
 
 @pytest.fixture
 def test_client():
+    from contextlib import asynccontextmanager
     from api.main import create_app
+
     app = create_app()
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def _noop_lifespan(_app):
+        yield
+
+    app.router.lifespan_context = _noop_lifespan
 
     # Inject mock state
     app.state.yaazhi = AsyncMock()
@@ -213,14 +224,20 @@ def test_client():
     ))
     app.state.retriever = AsyncMock()
     app.state.retriever.build_context = AsyncMock(return_value="Test context")
+    app.state.retriever.retrieve = AsyncMock(return_value=[])
     app.state.episodic = AsyncMock()
     app.state.episodic.add_message = AsyncMock()
     app.state.episodic._redis = AsyncMock()
     app.state.episodic._ensure_redis = AsyncMock()
     app.state.vector_store = AsyncMock()
+    app.state.vector_store.add = AsyncMock(return_value="mem-001")
     app.state.ingester = AsyncMock()
     app.state.stt_engine = AsyncMock()
     app.state.tts_engine = AsyncMock()
+    app.state.ping_results = {"vector_store": True, "episodic": True, "yaazhi": True}
 
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            yield client
+    finally:
+        app.router.lifespan_context = original_lifespan

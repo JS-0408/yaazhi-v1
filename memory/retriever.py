@@ -84,7 +84,12 @@ class SemanticRetriever:
 
         digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:32]
         cache_key = f"retrieval:{digest}:{top_k}"
-        cached_raw = await self._redis.get(cache_key)
+        cached_raw = None
+        if self._redis is not None:
+            try:
+                cached_raw = await self._redis.get(cache_key)
+            except Exception as exc:
+                logfire.warning("SemanticRetriever.retrieve: Redis get failed, proceeding to live search", error=str(exc))
         if cached_raw:
             try:
                 cached_data = json.loads(cached_raw)
@@ -288,31 +293,34 @@ class SemanticRetriever:
             pass  # fall through to SCAN
 
         # Bounded SCAN fallback (M5: capped at _MAX_SCAN_KEYS)
-        if not keyword_hits:
-            cursor = 0
-            scanned = 0
-            while scanned < _MAX_SCAN_KEYS:
-                cursor, keys = await self._redis.scan(
-                    cursor, match="retrieval:*", count=100
-                )
-                for key in keys:
-                    raw = await self._redis.get(key)
-                    if not raw:
-                        continue
-                    try:
-                        items = json.loads(raw)
-                        for item in items:
-                            if item.get("memory_id") in seen_ids:
-                                continue
-                            text = item.get("text", "").lower()
-                            if query_words and any(w in text for w in query_words):
-                                keyword_hits.append(MemoryResult(**item))
-                                seen_ids.add(item["memory_id"])
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        pass
-                scanned += len(keys)
-                if cursor == 0:
-                    break
+        if not keyword_hits and self._redis is not None:
+            try:
+                cursor = 0
+                scanned = 0
+                while scanned < _MAX_SCAN_KEYS:
+                    cursor, keys = await self._redis.scan(
+                        cursor, match="retrieval:*", count=100
+                    )
+                    for key in keys:
+                        raw = await self._redis.get(key)
+                        if not raw:
+                            continue
+                        try:
+                            items = json.loads(raw)
+                            for item in items:
+                                if item.get("memory_id") in seen_ids:
+                                    continue
+                                text = item.get("text", "").lower()
+                                if query_words and any(w in text for w in query_words):
+                                    keyword_hits.append(MemoryResult(**item))
+                                    seen_ids.add(item["memory_id"])
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            pass
+                    scanned += len(keys)
+                    if cursor == 0:
+                        break
+            except Exception as exc:
+                logfire.warning("SemanticRetriever.hybrid_search: Redis scan failed", error=str(exc))
 
         merged.extend(keyword_hits)
         merged.sort(key=lambda r: r.score, reverse=True)

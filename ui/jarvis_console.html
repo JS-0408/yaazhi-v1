@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YAAZHI V4 — Realtime Voice & J.A.R.V.I.S. Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background: radial-gradient(circle at 50% 20%, #0b192c 0%, #050811 70%);
+      color: #e2e8f0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .hud-card {
+      background: rgba(11, 22, 38, 0.78);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      box-shadow: 0 0 28px rgba(14, 165, 233, 0.08);
+    }
+    .stage-pill {
+      transition: all 0.25s ease;
+    }
+    .stage-active {
+      border-color: #38bdf8 !important;
+      background: rgba(56, 189, 248, 0.18) !important;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col p-4 md:p-6 gap-4">
+  <!-- Top Header -->
+  <header class="hud-card rounded-2xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+      <div id="statusDot" class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></div>
+      <div>
+        <h1 class="text-lg font-bold tracking-wider text-sky-400">YAAZHI V4 // REALTIME VOICE CONSOLE</h1>
+        <p class="text-xs text-slate-400">OpenAI Realtime WebSocket + J.A.R.V.I.S. 4-Stage Orchestrator + Groq Whisper Turbo + Supabase pgvector</p>
+      </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      <span id="wsBadge" class="px-2.5 py-1 rounded-full bg-sky-500/15 border border-sky-400/40 text-sky-300">WS: Connecting...</span>
+      <span id="tinaiBadge" class="px-2.5 py-1 rounded-full bg-indigo-500/15 border border-indigo-400/40 text-indigo-300">Tiṇai: general_technical</span>
+      <span id="memBadge" class="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/40 text-emerald-300">Memories: 0</span>
+      <select id="voiceSelect" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200"></select>
+    </div>
+  </header>
+
+  <!-- J.A.R.V.I.S. 4-Stage Pipeline Bar (inspired by microsoft/JARVIS) -->
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+    <div id="st-stt" class="hud-card stage-pill rounded-xl p-3 border border-slate-800">
+      <div class="text-sky-400 font-semibold">STAGE 1 // AUDIO & VAD</div>
+      <div class="text-slate-400 mt-0.5">Groq Whisper Turbo + WebAudio VAD</div>
+    </div>
+    <div id="st-planning" class="hud-card stage-pill rounded-xl p-3 border border-slate-800">
+      <div class="text-sky-400 font-semibold">STAGE 2 // MUTARPORUḶ PLAN</div>
+      <div class="text-slate-400 mt-0.5">Akam/Puram Router + Task Decomposition</div>
+    </div>
+    <div id="st-execution" class="hud-card stage-pill rounded-xl p-3 border border-slate-800">
+      <div class="text-sky-400 font-semibold">STAGE 3 // AGENT & SKILL POOL</div>
+      <div class="text-slate-400 mt-0.5">Researcher / Coder / Memory / Reviewer</div>
+    </div>
+    <div id="st-speaking" class="hud-card stage-pill rounded-xl p-3 border border-slate-800">
+      <div class="text-sky-400 font-semibold">STAGE 4 // VOICE SYNTHESIS</div>
+      <div class="text-slate-400 mt-0.5">Neural Speech + Barge-In Interruption</div>
+    </div>
+  </section>
+
+  <!-- Main 3-Column Console (inspired by openai/openai-realtime-console) -->
+  <main class="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1">
+    <!-- Left: Conversation Transcript & Controls -->
+    <div class="lg:col-span-4 hud-card rounded-2xl p-4 flex flex-col justify-between">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
+        <span class="text-xs font-semibold tracking-wider text-sky-300 uppercase">Live Voice Transcript</span>
+        <span id="sessionLabel" class="text-xs text-slate-400 font-mono">session: init</span>
+      </div>
+      <div id="chatLog" class="flex-1 overflow-y-auto space-y-3 max-h-[380px] pr-1 text-sm">
+        <div class="p-3 rounded-xl bg-sky-950/50 border border-sky-500/30 text-slate-200">
+          <div class="text-xs text-sky-400 font-semibold mb-1">YAAZHI V4</div>
+          Vanakkam Santhosh! Click <b>Start Hands-Free Voice (Auto-VAD)</b> or hold <b>Push-to-Talk</b> and speak to me directly. You can interrupt me anytime by speaking.
+        </div>
+      </div>
+      <form id="textForm" class="mt-3 flex gap-2">
+        <input id="textInput" type="text" placeholder="Or type a message to Yaazhi (e.g. Run Python code or ask anything)..."
+          class="flex-1 bg-slate-900/90 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-400" />
+        <button type="submit" class="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm transition">Send</button>
+      </form>
+    </div>
+
+    <!-- Center: J.A.R.V.I.S. Arc Reactor Audio Orb & VAD Controls -->
+    <div class="lg:col-span-4 hud-card rounded-2xl p-5 flex flex-col items-center justify-between">
+      <div class="text-center">
+        <div id="orbStateText" class="text-sm font-semibold tracking-widest uppercase text-sky-300">STANDBY — READY FOR VOICE</div>
+        <p id="liveSubtitle" class="text-xs text-slate-400 mt-1">Speak naturally — Auto-VAD detects speech & silence automatically</p>
+      </div>
+
+      <div class="relative my-3 flex items-center justify-center">
+        <canvas id="orbCanvas" width="260" height="260" class="rounded-full"></canvas>
+      </div>
+
+      <!-- Waveform Bar (openai-realtime-console wav_renderer style) -->
+      <div class="w-full">
+        <div class="flex justify-between text-xs text-slate-400 mb-1">
+          <span>Mic Energy (VAD)</span>
+          <span id="vadLevelText">0%</span>
+        </div>
+        <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+          <div id="vadMeter" class="h-full bg-gradient-to-r from-sky-400 to-emerald-400 transition-all duration-75" style="width: 2%"></div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-center gap-2.5 mt-4 w-full">
+        <button id="btnAutoVad" type="button"
+          class="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs tracking-wide transition shadow-lg">
+          🎙️ Start Hands-Free Voice (Auto-VAD)
+        </button>
+        <button id="btnPtt" type="button"
+          class="px-4 py-2.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-200 font-semibold text-xs tracking-wide transition">
+          Hold Push-to-Talk
+        </button>
+        <button id="btnStopSpeech" type="button"
+          class="px-3 py-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-300 font-semibold text-xs transition">
+          ⏹️ Mute / Barge-In
+        </button>
+      </div>
+    </div>
+
+    <!-- Right: OpenAI Realtime EventLog + Active Agents & Skills Panel -->
+    <div class="lg:col-span-4 hud-card rounded-2xl p-4 flex flex-col justify-between gap-3">
+      <div>
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+          <span class="text-xs font-semibold tracking-wider text-sky-300 uppercase">Realtime Event Inspector</span>
+          <button id="clearEventsBtn" class="text-xs text-slate-400 hover:text-slate-200">Clear</button>
+        </div>
+        <div id="eventLog" class="font-mono text-xs space-y-1.5 max-h-[210px] overflow-y-auto pr-1 text-slate-300"></div>
+      </div>
+
+      <div class="border-t border-slate-800 pt-3">
+        <div class="text-xs font-semibold tracking-wider text-sky-300 uppercase mb-2">Active Agents & Installed Skills</div>
+        <div id="agentsList" class="flex flex-wrap gap-1.5 text-xs mb-2">
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">Researcher</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">Coder (Sandbox)</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">Memory (pgvector)</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">Reader</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">Architect</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-sky-300">SkillManager (17)</span>
+        </div>
+        <div id="skillsList" class="flex flex-wrap gap-1 max-h-[95px] overflow-y-auto text-xs text-slate-400"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const state = {
+      ws: null,
+      sessionId: "jarvis-" + Math.random().toString(36).slice(2, 8),
+      mode: "idle", // idle | listening | thinking | speaking
+      autoVadActive: false,
+      audioCtx: null,
+      analyser: null,
+      mediaStream: null,
+      mediaRecorder: null,
+      audioChunks: [],
+      isRecordingUtterance: false,
+      silenceStart: 0,
+      recognition: null,
+      selectedVoice: null,
+    };
+
+    const el = {
+      wsBadge: document.getElementById("wsBadge"),
+      tinaiBadge: document.getElementById("tinaiBadge"),
+      memBadge: document.getElementById("memBadge"),
+      sessionLabel: document.getElementById("sessionLabel"),
+      chatLog: document.getElementById("chatLog"),
+      eventLog: document.getElementById("eventLog"),
+      orbStateText: document.getElementById("orbStateText"),
+      liveSubtitle: document.getElementById("liveSubtitle"),
+      vadMeter: document.getElementById("vadMeter"),
+      vadLevelText: document.getElementById("vadLevelText"),
+      btnAutoVad: document.getElementById("btnAutoVad"),
+      btnPtt: document.getElementById("btnPtt"),
+      btnStopSpeech: document.getElementById("btnStopSpeech"),
+      textForm: document.getElementById("textForm"),
+      textInput: document.getElementById("textInput"),
+      voiceSelect: document.getElementById("voiceSelect"),
+      skillsList: document.getElementById("skillsList"),
+      orbCanvas: document.getElementById("orbCanvas"),
+    };
+
+    el.sessionLabel.textContent = "session: " + state.sessionId;
+
+    function logEvent(type, payload = {}) {
+      const row = document.createElement("div");
+      const ts = new Date().toLocaleTimeString();
+      const color = type.startsWith("response") ? "text-emerald-400" : type.startsWith("input") ? "text-amber-300" : "text-sky-300";
+      row.innerHTML = `<span class="text-slate-500">[${ts}]</span> <span class="${color}">${type}</span> <span class="text-slate-400">${JSON.stringify(payload).slice(0, 90)}</span>`;
+      el.eventLog.prepend(row);
+    }
+
+    document.getElementById("clearEventsBtn").onclick = () => { el.eventLog.innerHTML = ""; };
+
+    function setStage(stageKey) {
+      ["stt", "planning", "execution", "speaking"].forEach(k => {
+        const node = document.getElementById("st-" + k);
+        if (node) node.classList.toggle("stage-active", k === stageKey);
+      });
+    }
+
+    function appendChat(role, text, meta = "") {
+      const wrap = document.createElement("div");
+      const isUser = role === "user";
+      wrap.className = isUser
+        ? "p-3 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 ml-6"
+        : "p-3 rounded-xl bg-sky-950/60 border border-sky-500/30 text-slate-100 mr-4";
+      wrap.innerHTML = `
+        <div class="flex items-center justify-between text-xs mb-1">
+          <span class="font-semibold ${isUser ? "text-amber-300" : "text-sky-400"}">${isUser ? "SANTHOSH (VOICE/TEXT)" : "YAAZHI V4"}</span>
+          <span class="text-slate-400">${meta}</span>
+        </div>
+        <div class="whitespace-pre-wrap leading-relaxed">${text.replace(/</g, "&lt;")}</div>
+      `;
+      el.chatLog.appendChild(wrap);
+      el.chatLog.scrollTop = el.chatLog.scrollHeight;
+    }
+
+    // Populate Voices (Natural Neural Browser TTS + Server WAV fallback)
+    function loadVoices() {
+      if (!("speechSynthesis" in window)) return;
+      const voices = window.speechSynthesis.getVoices();
+      el.voiceSelect.innerHTML = "";
+      voices.forEach((v, idx) => {
+        const opt = document.createElement("option");
+        opt.value = idx;
+        opt.textContent = `${v.name} (${v.lang})`;
+        if (v.lang.startsWith("en") && (v.name.includes("Natural") || v.name.includes("Aria") || v.name.includes("Google") || !state.selectedVoice)) {
+          state.selectedVoice = v;
+          opt.selected = true;
+        }
+        el.voiceSelect.appendChild(opt);
+      });
+      el.voiceSelect.onchange = () => {
+        const v = window.speechSynthesis.getVoices()[ Number(el.voiceSelect.value) ];
+        if (v) state.selectedVoice = v;
+      };
+    }
+    if ("speechSynthesis" in window) {
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
+    function stopSpeaking() {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: "response.cancel", session_id: state.sessionId }));
+      }
+      if (state.mode === "speaking") {
+        state.mode = state.autoVadActive ? "listening" : "idle";
+        el.orbStateText.textContent = state.autoVadActive ? "LISTENING (AUTO-VAD)" : "STANDBY";
+      }
+    }
+    el.btnStopSpeech.onclick = stopSpeaking;
+
+    function speakReply(text) {
+      stopSpeaking();
+      const clean = text.replace(/```[\s\S]*?```/g, "Code block executed successfully.").replace(/[*#`_~]/g, "");
+      setStage("speaking");
+      state.mode = "speaking";
+      el.orbStateText.textContent = "YAAZHI SPEAKING...";
+      logEvent("response.audio_transcript.delta", { chars: clean.length });
+
+      if ("speechSynthesis" in window) {
+        const utter = new SpeechSynthesisUtterance(clean);
+        if (state.selectedVoice) utter.voice = state.selectedVoice;
+        utter.rate = 1.03;
+        utter.onend = () => {
+          state.mode = state.autoVadActive ? "listening" : "idle";
+          el.orbStateText.textContent = state.autoVadActive ? "LISTENING (AUTO-VAD)" : "STANDBY — READY";
+          setStage("");
+        };
+        window.speechSynthesis.speak(utter);
+      } else {
+        fetch("/api/v1/voice/synthesise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: clean.slice(0, 500), language: "en" }),
+        })
+          .then(r => r.blob())
+          .then(b => {
+            const audio = new Audio(URL.createObjectURL(b));
+            audio.onended = () => { state.mode = state.autoVadActive ? "listening" : "idle"; setStage(""); };
+            audio.play();
+          });
+      }
+    }
+
+    // Connect Realtime WebSocket
+    function connectWs() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${proto}//${location.host}/api/v1/voice/ws`);
+      state.ws = ws;
+      ws.onopen = () => {
+        el.wsBadge.textContent = "WS: Realtime Connected";
+        logEvent("websocket.connected", { host: location.host });
+      };
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        logEvent(msg.type, msg);
+        if (msg.type === "session.created") {
+          state.sessionId = msg.session.id;
+          el.sessionLabel.textContent = "session: " + state.sessionId;
+        } else if (msg.type === "jarvis.stage") {
+          setStage(msg.stage);
+          el.liveSubtitle.textContent = msg.status;
+        } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
+          if (msg.transcript) appendChat("user", msg.transcript, "Groq Whisper Turbo");
+        } else if (msg.type === "response.done") {
+          el.tinaiBadge.textContent = `Tiṇai: ${msg.tinai || "general"} (${msg.domain || "puram"})`;
+          el.memBadge.textContent = `Memories: ${msg.memories_used || 0}`;
+          const meta = `${(msg.agents_called || []).join(", ") || "direct"} | ${msg.processing_time_ms}ms`;
+          appendChat("assistant", msg.response_text, meta);
+          speakReply(msg.response_text);
+        }
+      };
+      ws.onclose = () => {
+        el.wsBadge.textContent = "WS: Reconnecting...";
+        setTimeout(connectWs, 2500);
+      };
+    }
+    connectWs();
+
+    // Send text or transcribed speech
+    async function sendTurn(text) {
+      if (!text.trim()) return;
+      stopSpeaking();
+      state.mode = "thinking";
+      el.orbStateText.textContent = "THINKING & EXECUTING AGENTS...";
+      setStage("planning");
+      appendChat("user", text, "Live Input");
+      logEvent("conversation.item.create", { text });
+
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({
+          type: "conversation.item.create",
+          session_id: state.sessionId,
+          text,
+        }));
+      } else {
+        const res = await fetch("/api/v1/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, session_id: state.sessionId, language: "auto" }),
+        });
+        const data = await res.json();
+        appendChat("assistant", data.response, `${(data.agents_called || []).join(",")} | ${data.processing_time_ms}ms`);
+        speakReply(data.response);
+      }
+    }
+
+    el.textForm.onsubmit = (e) => {
+      e.preventDefault();
+      const val = el.textInput.value.trim();
+      if (!val) return;
+      el.textInput.value = "";
+      sendTurn(val);
+    };
+
+    // Send recorded audio blob to Groq Whisper Turbo via WS
+    function commitAudioBlob(blob) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Audio = reader.result.split(",")[1];
+        if (state.ws && state.ws.readyState === WebSocket.OPEN && base64Audio) {
+          state.mode = "thinking";
+          el.orbStateText.textContent = "WHISPER TURBO TRANSCRIBING...";
+          setStage("stt");
+          logEvent("input_audio_buffer.commit", { bytes: blob.size });
+          state.ws.send(JSON.stringify({
+            type: "input_audio_buffer.commit",
+            session_id: state.sessionId,
+            audio: base64Audio,
+          }));
+        }
+      };
+      reader.readAsDataURL(blob);
+    }
+
+    // Hands-Free Auto-VAD + WebAudio Microphone Setup
+    async function toggleAutoVad() {
+      if (state.autoVadActive) {
+        state.autoVadActive = false;
+        state.mode = "idle";
+        el.btnAutoVad.textContent = "🎙️ Start Hands-Free Voice (Auto-VAD)";
+        el.orbStateText.textContent = "STANDBY";
+        if (state.recognition) state.recognition.stop();
+        return;
+      }
+
+      try {
+        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = state.audioCtx.createMediaStreamSource(state.mediaStream);
+        state.analyser = state.audioCtx.createAnalyser();
+        state.analyser.fftSize = 256;
+        source.connect(state.analyser);
+
+        state.autoVadActive = true;
+        state.mode = "listening";
+        el.btnAutoVad.textContent = "🟢 Hands-Free Auto-VAD Active (Click to Pause)";
+        el.orbStateText.textContent = "LISTENING (AUTO-VAD)";
+        logEvent("input_audio_buffer.vad_enabled", { threshold: 0.14, silence_ms: 1100 });
+
+        // Browser SpeechRecognition + Groq Whisper dual pipeline
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SR) {
+          const rec = new SR();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = "en-US";
+          rec.onresult = (ev) => {
+            for (let i = ev.resultIndex; i < ev.results.length; i++) {
+              const transcript = ev.results[i][0].transcript.trim();
+              if (transcript && state.mode === "speaking") {
+                logEvent("input_audio_buffer.speech_started", { barge_in: true });
+                stopSpeaking();
+              }
+              el.liveSubtitle.textContent = transcript;
+              if (ev.results[i].isFinal && transcript) {
+                logEvent("input_audio_buffer.speech_stopped", { transcript });
+                sendTurn(transcript);
+              }
+            }
+          };
+          rec.onend = () => { if (state.autoVadActive) try { rec.start(); } catch (_) {} };
+          rec.start();
+          state.recognition = rec;
+        }
+      } catch (err) {
+        logEvent("error.microphone", { message: String(err) });
+        alert("Microphone access is required for live voice: " + err.message);
+      }
+    }
+    el.btnAutoVad.onclick = toggleAutoVad;
+
+    // Push-to-Talk via MediaRecorder -> Groq Whisper Large v3 Turbo
+    el.btnPtt.onmousedown = async () => {
+      stopSpeaking();
+      if (!state.mediaStream) {
+        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      state.audioChunks = [];
+      state.mediaRecorder = new MediaRecorder(state.mediaStream);
+      state.mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) state.audioChunks.push(e.data); };
+      state.mediaRecorder.onstop = () => {
+        const blob = new Blob(state.audioChunks, { type: "audio/wav" });
+        commitAudioBlob(blob);
+      };
+      state.mediaRecorder.start();
+      state.mode = "listening";
+      el.orbStateText.textContent = "RECORDING PUSH-TO-TALK...";
+      logEvent("input_audio_buffer.speech_started", { mode: "ptt" });
+    };
+    el.btnPtt.onmouseup = () => {
+      if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
+        state.mediaRecorder.stop();
+        logEvent("input_audio_buffer.speech_stopped", { mode: "ptt" });
+      }
+    };
+
+    // Load installed skills into right panel
+    fetch("/api/v1/skills")
+      .then(r => r.json())
+      .then(skills => {
+        if (Array.isArray(skills)) {
+          el.skillsList.innerHTML = skills.map(s =>
+            `<span class="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">${s.name}</span>`
+          ).join("");
+        }
+      })
+      .catch(() => {});
+
+    // 60FPS J.A.R.V.I.S. Arc Reactor Audio Visualizer Canvas
+    const ctx = el.orbCanvas.getContext("2d");
+    let phase = 0;
+    const freqData = new Uint8Array(128);
+
+    function renderOrb() {
+      requestAnimationFrame(renderOrb);
+      phase += 0.04;
+      let energy = 0.05;
+      if (state.analyser) {
+        state.analyser.getByteFrequencyData(freqData);
+        let sum = 0;
+        for (let i = 0; i < 48; i++) sum += freqData[i];
+        energy = Math.min(1, sum / (48 * 180));
+        const pct = Math.round(energy * 100);
+        el.vadMeter.style.width = Math.max(2, pct) + "%";
+        el.vadLevelText.textContent = pct + "%";
+        if (energy > 0.28 && state.mode === "speaking") {
+          stopSpeaking(); // Barge-in on mic energy spike
+        }
+      } else if (state.mode === "speaking") {
+        energy = 0.35 + 0.25 * Math.sin(phase * 3.2);
+      } else if (state.mode === "thinking") {
+        energy = 0.25 + 0.15 * Math.cos(phase * 4.5);
+      }
+
+      ctx.clearRect(0, 0, 260, 260);
+      const cx = 130, cy = 130;
+      const baseColor = state.mode === "speaking" ? "16, 185, 129"
+        : state.mode === "thinking" ? "245, 158, 11"
+        : "56, 189, 248";
+
+      // Outer glowing rings
+      for (let r = 1; r <= 3; r++) {
+        ctx.beginPath();
+        const radius = 58 + r * 18 + energy * 24 * Math.sin(phase + r);
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${baseColor}, ${0.42 - r * 0.1})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // Radial frequency bars
+      const bars = 48;
+      for (let i = 0; i < bars; i++) {
+        const angle = (i / bars) * Math.PI * 2 + phase * 0.25;
+        const val = state.analyser ? (freqData[i] / 255) : (0.15 + 0.15 * Math.sin(phase * 2 + i));
+        const r1 = 52;
+        const r2 = 52 + val * 42;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * r1, cy + Math.sin(angle) * r1);
+        ctx.lineTo(cx + Math.cos(angle) * r2, cy + Math.sin(angle) * r2);
+        ctx.strokeStyle = `rgba(${baseColor}, 0.85)`;
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+      }
+
+      // Core reactor sphere
+      const grad = ctx.createRadialGradient(cx, cy, 6, cx, cy, 50 + energy * 18);
+      grad.addColorStop(0, `rgba(${baseColor}, 0.95)`);
+      grad.addColorStop(1, `rgba(${baseColor}, 0.05)`);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 48 + energy * 14, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+    renderOrb();
+  </script>
+</body>
+</html>

@@ -22,6 +22,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from config.settings import settings
+from core.context import get_user_id
 from memory.ingestion import IngestResult
 
 router = APIRouter(tags=["memory"])
@@ -124,9 +125,16 @@ async def memory_stats(request: Request) -> dict:
     chroma_ok = vs._use_chroma
     pg_ok = vs._pg_pool is not None
     mem0_ok = vs._use_mem0 and vs._mem0 is not None
+    pending_count = 0
+    if hasattr(vs, "_pending_queue") and vs._pending_queue is not None:
+        try:
+            pending_count = await vs._pending_queue.size()
+        except Exception:
+            pending_count = 0
 
     return {
         "total_memories": total,
+        "pending_queue_size": pending_count,
         "mem0_status": "active" if mem0_ok else "inactive",
         "chromadb_status": "active" if chroma_ok else "inactive",
         "pgvector_status": "active" if pg_ok else "inactive",
@@ -139,14 +147,18 @@ async def add_memory(request: Request, body: AddMemoryRequest) -> dict:
     logfire.debug("POST /memory/add", source=body.source, chars=len(body.text))
     state = request.app.state
     vs = state.vector_store
+    try:
+        uid = get_user_id()
+    except RuntimeError:
+        uid = settings.default_user_id
     metadata: dict = {"tags": body.tags, "manual": True}
     memory_id = await vs.add(
         body.text,
         metadata=metadata,
         source=body.source,
-        user_id=settings.default_user_id,
+        user_id=uid,
     )
-    logfire.info("Memory added manually", memory_id=memory_id)
+    logfire.info("Memory added manually", memory_id=memory_id, user_id=uid)
     return {"memory_id": memory_id}
 
 
@@ -242,7 +254,7 @@ async def upload_and_ingest(
 
 @router.get("/sessions", summary="List all conversation sessions with metadata")
 async def list_all_sessions(request: Request) -> list[dict]:
-    """Return all active sessions from Redis with message count and TTL info."""
+    """Return all active sessions from Redis (or fallback store) with message count and TTL info."""
     logfire.debug("GET /memory/sessions")
     state = request.app.state
     episodic = state.episodic
@@ -250,32 +262,50 @@ async def list_all_sessions(request: Request) -> list[dict]:
     r = episodic._redis   # reuse existing connection
 
     results: list[dict] = []
-    cursor = 0
-    while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
-        for key in keys:
-            session_id = key.split(":")[1]
-            count = await r.llen(key)
-            ttl = await r.ttl(key)
-            now_ts = int(datetime.now(timezone.utc).timestamp())
-            last_active_ts = now_ts - (86400 - ttl) if ttl > 0 else now_ts
-            results.append(
-                {
-                    "session_id": session_id,
-                    "message_count": count,
-                    "last_active": datetime.fromtimestamp(
-                        last_active_ts, tz=timezone.utc
-                    ).isoformat(),
-                }
-            )
-        if cursor == 0:
-            break
+    if r is not None:
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(cursor, match="*session:*:messages", count=100)
+                for key in keys:
+                    key_str = key.decode() if isinstance(key, bytes) else str(key)
+                    parts = key_str.split(":")
+                    session_id = parts[3] if (len(parts) >= 5 and parts[0] == "user") else parts[1]
+                    count = await r.llen(key)
+                    ttl = await r.ttl(key)
+                    now_ts = int(datetime.now(timezone.utc).timestamp())
+                    last_active_ts = now_ts - (86400 - ttl) if ttl > 0 else now_ts
+                    results.append(
+                        {
+                            "session_id": session_id,
+                            "message_count": count,
+                            "last_active": datetime.fromtimestamp(
+                                last_active_ts, tz=timezone.utc
+                            ).isoformat(),
+                        }
+                    )
+                if cursor == 0:
+                    break
+            return results
+        except Exception as exc:
+            logfire.warning("GET /memory/sessions: Redis scan failed, using fallback", error=str(exc))
+
+    for key_str, msgs in getattr(episodic, "_fallback_sessions", {}).items():
+        parts = key_str.split(":")
+        session_id = parts[3] if (len(parts) >= 5 and parts[0] == "user") else parts[1]
+        results.append(
+            {
+                "session_id": session_id,
+                "message_count": len(msgs),
+                "last_active": datetime.now(timezone.utc).isoformat(),
+            }
+        )
     return results
 
 
 @router.post("/consolidate", summary="Summarise sessions with more than 50 messages")
 async def consolidate_sessions(request: Request) -> dict:
-    """Compress long sessions by generating and caching summaries."""
+    """Compress long sessions by generating and caching summaries, and drain pending memories."""
     logfire.debug("POST /memory/consolidate")
     state = request.app.state
     episodic = state.episodic
@@ -283,24 +313,38 @@ async def consolidate_sessions(request: Request) -> dict:
     r = episodic._redis
 
     compressed = 0
-    cursor = 0
-    while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
-        for key in keys:
-            count = await r.llen(key)
-            if count > 50:
-                session_id = key.split(":")[1]
-                try:
-                    await episodic.summarize_session(session_id)
-                    compressed += 1
-                except Exception as exc:
-                    logfire.warning(
-                        "consolidate: summarize failed",
-                        session_id=session_id[:8],
-                        error=str(exc),
-                    )
-        if cursor == 0:
-            break
+    if r is not None:
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(cursor, match="*session:*:messages", count=100)
+                for key in keys:
+                    count = await r.llen(key)
+                    if count > 50:
+                        key_str = key.decode() if isinstance(key, bytes) else str(key)
+                        parts = key_str.split(":")
+                        session_id = parts[3] if (len(parts) >= 5 and parts[0] == "user") else parts[1]
+                        try:
+                            await episodic.summarize_session(session_id)
+                            compressed += 1
+                        except Exception as exc:
+                            logfire.warning(
+                                "consolidate: summarize failed",
+                                session_id=session_id[:8],
+                                error=str(exc),
+                            )
+                if cursor == 0:
+                    break
+        except Exception as exc:
+            logfire.warning("POST /memory/consolidate: Redis scan failed", error=str(exc))
 
-    logfire.info("Memory consolidation complete", sessions_compressed=compressed)
-    return {"sessions_compressed": compressed}
+    drained = 0
+    vs = getattr(state, "vector_store", None)
+    if vs is not None and hasattr(vs, "drain_pending"):
+        try:
+            drained = await vs.drain_pending()
+        except Exception as exc:
+            logfire.warning("POST /memory/consolidate: drain_pending failed", error=str(exc))
+
+    logfire.info("Memory consolidation complete", sessions_compressed=compressed, pending_drained=drained)
+    return {"sessions_compressed": compressed, "pending_memories_drained": drained}

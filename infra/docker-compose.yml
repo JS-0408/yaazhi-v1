@@ -40,7 +40,7 @@ services:
   yaazhi-chroma:
     image: chromadb/chroma:0.5.23
     container_name: yaazhi-chroma
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     # Port NOT exposed to host — only reachable via yaazhi-db-net
     expose:
       - "8000"
@@ -73,7 +73,7 @@ services:
   yaazhi-postgres:
     image: pgvector/pgvector:pg16
     container_name: yaazhi-postgres
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     # INF-3: No ports: block — PostgreSQL is internal-only
     expose:
       - "5432"
@@ -84,7 +84,8 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./init_v4.sql:/docker-entrypoint-initdb.d/02_init_v4.sql:ro
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yaazhi -d yaazhi_db"]
@@ -103,7 +104,7 @@ services:
   yaazhi-redis:
     image: redis:7.2-alpine
     container_name: yaazhi-redis
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     # INF-2: Requires password — no unauthenticated access
     expose:
       - "6379"
@@ -135,11 +136,11 @@ services:
   yaazhi-ollama:
     image: ollama/ollama:latest
     container_name: yaazhi-ollama
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     expose:
       - "11434"
     volumes:
-      - ./ollama_models:/root/.ollama
+      - ../ollama_models:/root/.ollama
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
@@ -159,7 +160,7 @@ services:
   yaazhi-n8n:
     image: n8nio/n8n:1.47.1
     container_name: yaazhi-n8n
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     ports:
       - "5678:5678"
     environment:
@@ -196,14 +197,14 @@ services:
   # ── Yaazhi API (FastAPI) ──────────────────────────────────────────────────────
   yaazhi-api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile
     container_name: yaazhi-api
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     ports:
       - "8000:8000"
     env_file:
-      - config/.env
+      - ../config/.env
     depends_on:
       yaazhi-chroma:
         condition: service_healthy
@@ -238,11 +239,11 @@ services:
   yaazhi-prometheus:
     image: prom/prometheus:v2.53.0
     container_name: yaazhi-prometheus
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     ports:
       - "9090:9090"
     volumes:
-      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -267,7 +268,7 @@ services:
   yaazhi-grafana:
     image: grafana/grafana:11.1.0
     container_name: yaazhi-grafana
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     ports:
       - "3000:3000"
     environment:
@@ -298,7 +299,7 @@ services:
   yaazhi-uptime-kuma:
     image: louislam/uptime-kuma:1
     container_name: yaazhi-uptime-kuma
-    platform: linux/arm64
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
     ports:
       - "3001:3001"
     volumes:

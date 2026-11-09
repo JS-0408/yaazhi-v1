@@ -15,12 +15,17 @@ RESET ROLE;
 -- ── Semantic memory ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS yaazhi_memories (
     id          UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id     TEXT        NOT NULL DEFAULT 'default',
     content     TEXT        NOT NULL,
     embedding   vector(768),
     metadata    JSONB       DEFAULT '{}',
     source      TEXT        DEFAULT 'manual',
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Additive migration for existing databases created prior to Phase 1 user_id isolation
+ALTER TABLE yaazhi_memories ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_memories_user_id ON yaazhi_memories (user_id);
 
 -- ── Conversations (INF-6 FIX: user_id + language added, now written to) ─────
 CREATE TABLE IF NOT EXISTS yaazhi_conversations (
@@ -76,6 +81,11 @@ SELECT source, COUNT(*) AS memory_count,
 FROM yaazhi_memories GROUP BY source;
 
 -- ── Permissions ───────────────────────────────────────────────────────────────
-GRANT ALL PRIVILEGES ON ALL TABLES    IN SCHEMA public TO yaazhi;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO yaazhi;
-GRANT EXECUTE ON ALL FUNCTIONS        IN SCHEMA public TO yaazhi;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'yaazhi') THEN
+        GRANT ALL PRIVILEGES ON ALL TABLES    IN SCHEMA public TO yaazhi;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO yaazhi;
+        GRANT EXECUTE ON ALL FUNCTIONS        IN SCHEMA public TO yaazhi;
+    END IF;
+END $$;

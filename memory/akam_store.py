@@ -71,7 +71,8 @@ class AkamState:
         objectives_str = " | ".join(self.objectives[:3])
 
         block = (
-            f"[AKAM] Burnout: {self.burnout_score:.2f} ({burnout_label}) | "
+            f"[AKAM (heuristic estimate, not ground truth)] "
+            f"Burnout (heuristic estimate): {self.burnout_score:.2f} ({burnout_label}) | "
             f"Tone: {self.preferred_tone} | "
             f"Constraints: {constraints_str or 'none'} | "
             f"Objectives: {objectives_str or 'none'}"
@@ -103,7 +104,9 @@ class AkamStore:
     _REDIS_TTL     = 3600  # 1 hour hot-cache
 
     def __init__(self) -> None:
+        from memory.resilience import RetryGate
         self._pg_pool:  Any = None
+        self._pg_gate:  RetryGate = RetryGate()
         self._redis:    Any = None
 
     # ------------------------------------------------------------------
@@ -113,14 +116,21 @@ class AkamStore:
     async def _ensure_pg(self) -> None:
         if self._pg_pool is not None:
             return
-        if not settings.postgres_url:
+        if not settings.postgres_url or not self._pg_gate.ready():
             return
         try:
             import asyncpg  # type: ignore
+            from memory.resilience import PG_CONNECT_TIMEOUT_S
             self._pg_pool = await asyncpg.create_pool(
-                settings.postgres_url, min_size=1, max_size=3, statement_cache_size=0
+                settings.postgres_url,
+                min_size=1,
+                max_size=3,
+                timeout=PG_CONNECT_TIMEOUT_S,
+                statement_cache_size=0,
             )
+            self._pg_gate.reset()
         except Exception as exc:
+            self._pg_gate.record_failure()
             logfire.warning("AkamStore: PostgreSQL pool failed", error=str(exc))
 
     async def _ensure_redis(self) -> None:

@@ -24,12 +24,14 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator
 
 import logfire
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from prometheus_client import make_asgi_app
 
 from agents.browser import BrowserAgent
@@ -42,8 +44,10 @@ from api.middleware import (
 )
 from api.routes.chat import router as chat_router
 from api.routes.memory import router as memory_router
+from api.routes.skills import router as skills_router
 from api.routes.voice import router as voice_router
 from config.settings import settings
+from core.skill_manager import SkillManager
 from core.v4_orchestrator import YaazhiV4
 from memory.episodic import EpisodicMemory
 
@@ -82,7 +86,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         Control to the application.
     """
-    logfire.configure(token=settings.logfire_token or None)
+    logfire.configure(
+        token=settings.logfire_token or None,
+        send_to_logfire="if-token-present",
+    )
     logfire.info("Yaazhi API starting up", version=settings.app_version)
 
     # ── Initialise components ──────────────────────────────────────────────────
@@ -129,16 +136,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.browser = browser
     app.state.notifier = notifier
     app.state.stt = stt
+    app.state.stt_engine = stt
     app.state.tts = tts
+    app.state.tts_engine = tts
     app.state.yaazhi = yaazhi
+    app.state.skill_manager = SkillManager(vector_store=vs)
+    try:
+        await app.state.skill_manager.sync_from_cluster()
+    except Exception as exc:
+        logfire.warning("SkillManager cluster sync skipped at startup", error=str(exc))
+    try:
+        await vs.drain_pending()
+    except Exception as exc:
+        logfire.warning("VectorStore drain_pending skipped at startup", error=str(exc))
     app.state.ping_results = ping_results
 
-    logfire.info("Yaazhi API startup complete", healthy=sum(ping_results.values()))
+    logfire.info("Yaazhi API startup complete", node_id=settings.node_id, healthy=sum(ping_results.values()))
 
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────────
-    logfire.info("Yaazhi API shutting down")
+    logfire.info("Yaazhi API shutting down", node_id=settings.node_id)
+    if hasattr(yaazhi, "close"):
+        try:
+            await yaazhi.close()
+        except Exception as exc:
+            logfire.warning("Yaazhi close error during shutdown", error=str(exc))
     try:
         await browser.close()
     except Exception as exc:
@@ -185,6 +208,7 @@ app.add_middleware(TimingMiddleware)
 # ── Routers ────────────────────────────────────────────────────────────────────
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(memory_router, prefix="/api/v1/memory")
+app.include_router(skills_router, prefix="/api/v1/skills")
 app.include_router(voice_router, prefix="/api/v1/voice")
 
 # ── Prometheus metrics mount ───────────────────────────────────────────────────
@@ -193,6 +217,16 @@ app.mount("/metrics", metrics_app)
 
 
 # ── Core endpoints ─────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/console", response_class=HTMLResponse, tags=["ui"], summary="Yaazhi V4 Realtime Voice & J.A.R.V.I.S. Console")
+async def voice_console() -> HTMLResponse:
+    """Serve the interactive OpenAI-Realtime + J.A.R.V.I.S. Voice Console UI."""
+    ui_path = Path(__file__).resolve().parent.parent / "ui" / "jarvis_console.html"
+    if ui_path.exists():
+        return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Yaazhi V4 Voice Console not found</h1>", status_code=404)
+
 
 @app.get("/health", tags=["ops"], summary="System health check")
 async def health() -> dict:
@@ -207,6 +241,7 @@ async def health() -> dict:
     all_healthy = all(ping_results.values()) if ping_results else False
     return {
         "status": "ok" if all_healthy else "degraded",
+        "node_id": settings.node_id,
         "services": ping_results,
         "uptime_seconds": uptime,
         "version": settings.app_version,
@@ -233,11 +268,14 @@ async def daily_digest() -> dict:
 # ── Dev entrypoint ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import importlib.util
+
+    _loop = "uvloop" if importlib.util.find_spec("uvloop") else "auto"
     uvicorn.run(
         "api.main:app",
         host=settings.app_host,
         port=settings.app_port,
         reload=settings.debug,
-        loop="uvloop",
+        loop=_loop,
         log_level="info",
     )

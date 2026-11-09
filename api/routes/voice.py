@@ -6,15 +6,17 @@ Audit fixes: API-6 (tempfile.gettempdir), API-7 (voice sessions in episodic memo
 
 from __future__ import annotations
 
+import base64
+import json
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import aiofiles
 import logfire
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -42,6 +44,11 @@ class VoiceChatResponse(BaseModel):
     detected_language: str
     confidence: Optional[float]
     processing_time_ms: int
+    agents_called: list[str] = Field(default_factory=list)
+    model_used: str = Field(default="")
+    memories_used: int = Field(default=0)
+    tinai: str = Field(default="general_technical")
+    domain: str = Field(default="puram")
 
 
 @router.post("/transcribe", summary="Transcribe audio to text")
@@ -120,6 +127,19 @@ async def voice_chat(
     except Exception:
         pass
 
+    # Persist voice turn to semantic vector store for cross-session recall
+    if hasattr(state, "vector_store") and state.vector_store is not None:
+        try:
+            await state.vector_store.add(
+                f"[User]: {transcribed}\n[Yaazhi]: {response_text}",
+                metadata={"session_id": session_id, "modality": "voice"},
+                source="voice",
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logfire.warning("POST /voice/chat: vector_store.add failed (non-fatal)", error=str(exc))
+
+    meta: dict[str, Any] = getattr(output, "metadata", {}) or {}
     logfire.info("POST /voice/chat success", session_id=session_id[:8])
     return VoiceChatResponse(
         transcribed=transcribed,
@@ -128,6 +148,11 @@ async def voice_chat(
         detected_language=detected_lang,
         confidence=confidence,
         processing_time_ms=int((time.time() - t_start) * 1000),
+        agents_called=getattr(output, "agents_called", []) or [],
+        model_used=getattr(output, "model_used", "") or "",
+        memories_used=getattr(output, "memories_used", 0) or 0,
+        tinai=str(meta.get("tinai", "general_technical")),
+        domain=str(meta.get("domain", "puram")),
     )
 
 
@@ -140,3 +165,105 @@ async def synthesise(request: Request, body: TTSRequest) -> Response:
     except Exception as exc:
         raise HTTPException(500, f"TTS failed: {exc}") from exc
     return Response(content=audio, media_type="audio/wav")
+
+
+@router.websocket("/ws")
+async def voice_realtime_ws(websocket: WebSocket) -> None:
+    """
+    OpenAI-Realtime + J.A.R.V.I.S. compatible bidirectional voice WebSocket.
+
+    Supports events:
+      - input_audio_buffer.commit (base64 audio -> Groq Whisper STT -> Yaazhi V4 -> response)
+      - conversation.item.create  (text turn -> Yaazhi V4 -> response)
+      - response.cancel           (barge-in interruption)
+    """
+    await websocket.accept()
+    state = websocket.app.state
+    session_id = f"rt-{uuid.uuid4().hex[:8]}"
+    await websocket.send_json({
+        "type": "session.created",
+        "session": {
+            "id": session_id,
+            "model": "groq/qwen/qwen3.8-27b",
+            "stt": "whisper-large-v3-turbo",
+            "turn_detection": {"type": "server_vad", "silence_duration_ms": 1100},
+        },
+    })
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            event = json.loads(raw)
+            ev_type = event.get("type", "")
+            session_id = event.get("session_id", session_id)
+
+            if ev_type == "response.cancel":
+                await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
+                continue
+
+            user_text = ""
+            if ev_type == "input_audio_buffer.commit":
+                audio_b64 = event.get("audio", "")
+                if audio_b64:
+                    audio_bytes = base64.b64decode(audio_b64)
+                    await websocket.send_json({"type": "jarvis.stage", "stage": "stt", "status": "Transcribing via Whisper Turbo..."})
+                    stt_res = await state.stt_engine.transcribe_bytes(audio_bytes)
+                    user_text = (stt_res.get("text") or "").strip()
+                    await websocket.send_json({
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": user_text,
+                        "confidence": stt_res.get("confidence", 0.98),
+                    })
+            elif ev_type == "conversation.item.create":
+                user_text = (event.get("text") or "").strip()
+
+            if not user_text:
+                continue
+
+            t0 = time.time()
+            await websocket.send_json({"type": "jarvis.stage", "stage": "planning", "status": "Stage 1: Mutarporul & Task Planning..."})
+            recalled = ""
+            try:
+                recalled = await state.retriever.build_context(user_text, max_tokens=1000)
+            except Exception:
+                pass
+            try:
+                await state.episodic.add_message(session_id, "user", user_text)
+            except Exception:
+                pass
+
+            await websocket.send_json({"type": "jarvis.stage", "stage": "execution", "status": "Stage 2-3: Multi-Agent Execution & Review..."})
+            output = await state.yaazhi.run(user_text, session_id, context=recalled)
+            resp_text = output.response
+
+            try:
+                await state.episodic.add_message(session_id, "assistant", resp_text)
+            except Exception:
+                pass
+            if getattr(state, "vector_store", None) is not None:
+                try:
+                    await state.vector_store.add(
+                        f"[User]: {user_text}\n[Yaazhi]: {resp_text}",
+                        metadata={"session_id": session_id, "modality": "realtime_voice"},
+                        source="voice",
+                        session_id=session_id,
+                    )
+                except Exception:
+                    pass
+
+            meta: dict[str, Any] = getattr(output, "metadata", {}) or {}
+            await websocket.send_json({
+                "type": "response.done",
+                "session_id": session_id,
+                "transcript": user_text,
+                "response_text": resp_text,
+                "agents_called": getattr(output, "agents_called", []) or [],
+                "model_used": getattr(output, "model_used", "") or "",
+                "memories_used": getattr(output, "memories_used", 0) or 0,
+                "tinai": str(meta.get("tinai", "general_technical")),
+                "domain": str(meta.get("domain", "puram")),
+                "processing_time_ms": int((time.time() - t0) * 1000),
+            })
+    except WebSocketDisconnect:
+        logfire.info("Realtime voice WebSocket disconnected", session_id=session_id[:8])
+    except Exception as exc:
+        logfire.warning("Realtime voice WebSocket error", error=str(exc))

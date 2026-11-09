@@ -51,6 +51,10 @@ class Reviewer:
     _PASS_THRESHOLD: float = 0.75
     _FAIL_THRESHOLD: float = 0.50
 
+    async def ping(self) -> bool:
+        """Health check for Reviewer readiness."""
+        return bool(settings.groq_api_key or settings.nvidia_api_key or settings.google_api_key or settings.anthropic_api_key)
+
     # ------------------------------------------------------------------
     # Main review entry point
     # ------------------------------------------------------------------

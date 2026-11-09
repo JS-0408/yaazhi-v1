@@ -1,0 +1,41 @@
+# ─── Yaazhi Multi-VPS Stateless Worker Node Compose ─────────────────────────
+# Deploy this on secondary VPS nodes (VPS-2, VPS-3, etc.) to scale Yaazhi
+# horizontally behind Cloudflare Tunnel or a load balancer.
+#
+# All stateful persistence (PostgreSQL/pgvector, Redis, installed Skills,
+# Episodic sessions, Rate Limits, and Cost Tracking) is shared across nodes
+# via POSTGRES_URL and REDIS_URL in config/.env.
+
+networks:
+  yaazhi-worker-net:
+    driver: bridge
+    name: yaazhi-worker-net
+
+services:
+  yaazhi-api-worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: yaazhi-api-${YAAZHI_NODE_ID:-worker-2}
+    platform: "${DOCKER_PLATFORM:-linux/amd64}"
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../config/.env
+    environment:
+      YAAZHI_NODE_ID: "${YAAZHI_NODE_ID:-vps-worker-2}"
+      VECTOR_BACKEND: "${VECTOR_BACKEND:-pgvector}"
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 45s
+    networks:
+      - yaazhi-worker-net
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+

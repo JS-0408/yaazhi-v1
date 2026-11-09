@@ -1,0 +1,11 @@
+{
+  "name": "vibe-coding-engine",
+  "displayName": "Autonomous Vibe-Coding Engine",
+  "version": "1.0.0",
+  "description": "Autonomous developer environment bundle with 17 vibe-coding skills across AST analysis, self-testing & debugging loops, GitHub open-source skill discovery, and vector-memory self-improvement.",
+  "suggestedPrompts": [
+    "Parse the AST skeleton of core/ and identify refactoring targets",
+    "Fetch an open-source skill from GitHub, audit its AST, and install it",
+    "Run the auto-debugger and coverage-booster loop on the test suite"
+  ]
+}

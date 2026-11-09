@@ -31,6 +31,11 @@ import redis.asyncio as aioredis
 
 from config.settings import settings
 from core.state import MemoryResult
+from memory.resilience import (
+    PG_CONNECT_TIMEOUT_S,
+    PendingMemoryQueue,
+    RetryGate,
+)
 
 try:
     import chromadb
@@ -91,12 +96,17 @@ class VectorStore:
     similarity search.  Every fallback switch is logged via logfire.
     """
 
+    _MAX_FALLBACK_MEMORY: int = 1000
+
     def __init__(self) -> None:
         self._mem0: Optional[Any] = None
         self._chroma_client: Optional[Any] = None
         self._chroma_collection: Optional[Any] = None
         self._pg_pool: Optional[asyncpg.Pool] = None
+        self._pg_gate: RetryGate = RetryGate()
         self._redis: Optional[aioredis.Redis] = None
+        self._pending_queue: PendingMemoryQueue = PendingMemoryQueue(lambda: self._redis)
+        self._last_embed_degraded: bool = False
         self._fallback_memory: list[dict[str, Any]] = []
         self._collection_name: str = "yaazhi_memories"
         self._embed_dim: int = 768
@@ -164,17 +174,20 @@ class VectorStore:
                 logfire.warning("ChromaDB unavailable, switching to pgvector", error=str(exc))
                 self._use_chroma = False
 
-        # pgvector pool
-        if self._pg_pool is None and settings.postgres_url:
+        # pgvector pool (guarded by RetryGate + connect timeout so a down PG does not stall every call)
+        if self._pg_pool is None and settings.postgres_url and self._pg_gate.ready():
             try:
                 self._pg_pool = await asyncpg.create_pool(
                     settings.postgres_url,
                     min_size=2,
                     max_size=10,
+                    timeout=PG_CONNECT_TIMEOUT_S,
                     command_timeout=30,
                     statement_cache_size=0,
                 )
+                self._pg_gate.reset()
             except Exception as exc:
+                self._pg_gate.record_failure()
                 logfire.error("pgvector pool creation failed", error=str(exc))
 
     # ------------------------------------------------------------------
@@ -240,10 +253,15 @@ class VectorStore:
                     f"Ollama embedding failed: HTTP {resp.status_code}: {resp.text[:200]}"
                 )
             embedding: list[float] = resp.json()["embedding"]
+            self._last_embed_degraded = False
         except Exception as exc:
             logfire.warning("Ollama embedding service unavailable, using deterministic fallback", error=str(exc))
+            self._last_embed_degraded = True
             raw_hash = hashlib.sha256(text.encode("utf-8")).digest()
             embedding = [(b / 255.0) for b in (raw_hash * 24)[:768]]
+            # Never cache a degraded hash vector in Redis — doing so poisons
+            # semantic search for 24h even after Ollama recovers.
+            return embedding
 
         if self._redis:
             try:
@@ -281,31 +299,33 @@ class VectorStore:
     def _search_fallback_memory(
         self,
         query: str,
-        top_k: int,
-        filter: dict[str, Any],
-        user_id: Optional[str],
-        agent_id: Optional[str],
+        top_k: int = 5,
+        filter: Optional[dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> list[MemoryResult]:
+        """Search in-memory fallback store with unconditional user_id, agent_id, and filter checks."""
         results: list[MemoryResult] = []
         query_lower = query.lower()
         for entry in self._fallback_memory:
+            meta = entry.get("metadata", {})
             if filter:
-                if any(entry["metadata"].get(k) != v for k, v in filter.items()):
+                if any(meta.get(k) != v for k, v in filter.items()):
                     continue
-            if user_id and entry["metadata"].get("user_id") != user_id:
+            if user_id and meta.get("user_id") != user_id:
                 continue
-            if agent_id and entry["metadata"].get("agent_id") != agent_id:
+            if agent_id and meta.get("agent_id") != agent_id:
                 continue
-            score = self._simple_query_score(entry["content"], query_lower)
-            if score <= 0.0:
-                continue
+            content = entry.get("content", "")
+            overlap_score = self._simple_query_score(content, query_lower)
+            score = overlap_score if overlap_score > 0.0 else 0.1
             results.append(
                 MemoryResult(
                     memory_id=entry["memory_id"],
-                    text=entry["content"],
+                    text=content,
                     score=round(score, 4),
-                    source=entry.get("source", "manual"),
-                    metadata=entry["metadata"],
+                    source=entry.get("source", "fallback"),
+                    metadata=meta,
                     created_at=None,
                 )
             )
@@ -389,6 +409,19 @@ class VectorStore:
 
         # ── Raw ChromaDB path ──────────────────────────────────────────────
         embedding = await self._embed(text)
+        if self._last_embed_degraded:
+            meta["embedding_degraded"] = True
+            await self._pending_queue.enqueue(
+                {
+                    "memory_id": memory_id,
+                    "text": text,
+                    "metadata": metadata,
+                    "source": source,
+                    "user_id": uid,
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                }
+            )
 
         if self._use_chroma and self._chroma_collection:
             try:
@@ -411,23 +444,44 @@ class VectorStore:
 
         # ── pgvector fallback path ─────────────────────────────────────────
         if self._pg_pool:
-            async with self._pg_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO yaazhi_memories (id, user_id, content, embedding, metadata, source)
-                    VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6)
-                    """,
-                    uuid.UUID(memory_id),
-                    uid,
-                    text,
-                    self._pg_vector_literal(embedding),   # M4 FIX
-                    json.dumps(meta, ensure_ascii=False),
-                    source,
-                )
-            duration_ms = int((time.time() - t_start) * 1000)
-            logfire.info("VectorStore.add success (pgvector)", memory_id=memory_id, duration_ms=duration_ms)
-            await self._post_add_index(memory_id)
-            return memory_id
+            try:
+                async with self._pg_pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO yaazhi_memories (id, user_id, content, embedding, metadata, source)
+                        VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6)
+                        ON CONFLICT (id) DO UPDATE
+                          SET content = EXCLUDED.content,
+                              embedding = EXCLUDED.embedding,
+                              metadata = EXCLUDED.metadata,
+                              source = EXCLUDED.source
+                        """,
+                        uuid.UUID(memory_id),
+                        uid,
+                        text,
+                        self._pg_vector_literal(embedding),   # M4 FIX
+                        json.dumps(meta, ensure_ascii=False),
+                        source,
+                    )
+                duration_ms = int((time.time() - t_start) * 1000)
+                logfire.info("VectorStore.add success (pgvector)", memory_id=memory_id, duration_ms=duration_ms)
+                await self._post_add_index(memory_id)
+                return memory_id
+            except Exception as exc:
+                self._pg_gate.record_failure()
+                logfire.warning("pgvector add failed, falling back to in-memory + pending queue", error=str(exc))
+                if not self._last_embed_degraded:
+                    await self._pending_queue.enqueue(
+                        {
+                            "memory_id": memory_id,
+                            "text": text,
+                            "metadata": metadata,
+                            "source": source,
+                            "user_id": uid,
+                            "agent_id": agent_id,
+                            "session_id": session_id,
+                        }
+                    )
 
         # ── In-memory fallback path for tests and degraded mode ─────────────
         self._fallback_memory.append(
@@ -438,10 +492,70 @@ class VectorStore:
                 "metadata": meta,
             }
         )
+        if len(self._fallback_memory) > self._MAX_FALLBACK_MEMORY:
+            del self._fallback_memory[:-self._MAX_FALLBACK_MEMORY]
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("VectorStore.add success (in-memory fallback)", memory_id=memory_id, duration_ms=duration_ms)
         await self._post_add_index(memory_id)
         return memory_id
+
+    async def drain_pending(self, max_items: int = 50) -> int:
+        """
+        Replay queued memory writes once Ollama / PostgreSQL recover.
+        Returns the number of memories successfully re-embedded and persisted.
+        """
+        await self._ensure_clients()
+        drained = 0
+        for _ in range(max_items):
+            item = await self._pending_queue.pop()
+            if item is None:
+                break
+            text = item.get("text", "")
+            embedding = await self._embed(text)
+            if self._last_embed_degraded:
+                # Ollama still unavailable — re-queue and stop draining for now
+                await self._pending_queue.enqueue(item)
+                break
+            memory_id = item.get("memory_id") or str(uuid.uuid4())
+            uid = item.get("user_id") or settings.default_user_id
+            source = item.get("source") or "manual"
+            meta = {
+                **(item.get("metadata") or {}),
+                "user_id": uid,
+                "source": source,
+                "embedding_degraded": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if self._pg_pool:
+                try:
+                    async with self._pg_pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO yaazhi_memories (id, user_id, content, embedding, metadata, source)
+                            VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6)
+                            ON CONFLICT (id) DO UPDATE
+                              SET content = EXCLUDED.content,
+                                  embedding = EXCLUDED.embedding,
+                                  metadata = EXCLUDED.metadata,
+                                  source = EXCLUDED.source
+                            """,
+                            uuid.UUID(memory_id),
+                            uid,
+                            text,
+                            self._pg_vector_literal(embedding),
+                            json.dumps(meta, ensure_ascii=False),
+                            source,
+                        )
+                    await self._post_add_index(memory_id)
+                    drained += 1
+                    continue
+                except Exception as exc:
+                    self._pg_gate.record_failure()
+                    logfire.warning("VectorStore.drain_pending PG write failed", error=str(exc))
+                    await self._pending_queue.enqueue(item)
+                    break
+            drained += 1
+        return drained
 
     # ------------------------------------------------------------------
     # search()  (M2 fix: no mutable default)
@@ -566,35 +680,41 @@ class VectorStore:
         # ── pgvector fallback ──────────────────────────────────────────────
         if not results:
             if self._pg_pool:
-                vec_literal = self._pg_vector_literal(embedding)   # M4 FIX
-                async with self._pg_pool.acquire() as conn:
-                    # P1.1: Filter by user_id to ensure isolation
-                    rows = await conn.fetch(
-                        """
-                        SELECT id::text, content, embedding <=> $1::vector AS distance,
-                               metadata, source, created_at
-                        FROM yaazhi_memories
-                        WHERE user_id = $3 OR metadata->>'user_id' = $3
-                        ORDER BY distance ASC
-                        LIMIT $2
-                        """,
-                        vec_literal,
-                        top_k,
-                        uid,  # P1.1: user_id filter
-                    )
-                    for row in rows:
-                        score = max(0.0, 1.0 - float(row["distance"]))
-                        meta = dict(json.loads(row["metadata"])) if row["metadata"] else {}
-                        results.append(
-                            MemoryResult(
-                                memory_id=row["id"],
-                                text=row["content"],
-                                score=round(score, 4),
-                                source=row["source"],
-                                metadata=meta,
-                                created_at=row["created_at"],
-                            )
+                try:
+                    vec_literal = self._pg_vector_literal(embedding)   # M4 FIX
+                    async with self._pg_pool.acquire() as conn:
+                        # P1.1: Filter by user_id to ensure isolation
+                        rows = await conn.fetch(
+                            """
+                            SELECT id::text, content, embedding <=> $1::vector AS distance,
+                                   metadata, source, created_at
+                            FROM yaazhi_memories
+                            WHERE user_id = $3 OR metadata->>'user_id' = $3
+                            ORDER BY distance ASC
+                            LIMIT $2
+                            """,
+                            vec_literal,
+                            top_k,
+                            uid,  # P1.1: user_id filter
                         )
+                        for row in rows:
+                            score = max(0.0, 1.0 - float(row["distance"]))
+                            meta = dict(json.loads(row["metadata"])) if row["metadata"] else {}
+                            results.append(
+                                MemoryResult(
+                                    memory_id=row["id"],
+                                    text=row["content"],
+                                    score=round(score, 4),
+                                    source=row["source"],
+                                    metadata=meta,
+                                    created_at=row["created_at"],
+                                )
+                            )
+                except Exception as exc:
+                    self._pg_gate.record_failure()
+                    logfire.warning("pgvector search failed, falling back to in-memory search", error=str(exc))
+                    if self._fallback_memory is not None:
+                        results = self._search_fallback_memory(query, top_k, filter, uid, agent_id)
             elif self._fallback_memory is not None:
                 results = self._search_fallback_memory(query, top_k, filter, uid, agent_id)
             else:
@@ -603,33 +723,6 @@ class VectorStore:
         duration_ms = int((time.time() - t_start) * 1000)
         logfire.info("VectorStore.search success", results=len(results), duration_ms=duration_ms)
         return results
-
-    def _search_fallback_memory(
-        self,
-        query: str,
-        top_k: int = 5,
-        filter: Optional[dict[str, Any]] = None,
-        user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-    ) -> list[MemoryResult]:
-        """Search in-memory fallback store."""
-        results: list[MemoryResult] = []
-        for item in self._fallback_memory:
-            if user_id and item.get("metadata", {}).get("user_id") not in (None, user_id):
-                continue
-            content = item.get("content", "")
-            score = 0.5 if query.lower() in content.lower() else 0.1
-            results.append(
-                MemoryResult(
-                    memory_id=item["memory_id"],
-                    text=content,
-                    score=score,
-                    source=item.get("source", "fallback"),
-                    metadata=item.get("metadata", {}),
-                )
-            )
-        results.sort(key=lambda r: r.score, reverse=True)
-        return results[:top_k]
 
     # ------------------------------------------------------------------
     # delete

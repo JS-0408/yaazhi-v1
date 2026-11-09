@@ -112,6 +112,7 @@ class TestAkamState:
         block = state.to_context_block()
         assert "0.75" in block
         assert "High" in block
+        assert "heuristic estimate" in block.lower()
 
     def test_context_block_contains_tone(self):
         state = self._make_state()
@@ -434,3 +435,42 @@ class TestReflectionPipeline:
             call_kwargs = mock_gs.add_fact.call_args.kwargs
             assert "code_execution" in call_kwargs["text"]
             assert call_kwargs["confidence"] >= 0.85
+
+
+class TestYaazhiV4Orchestrator:
+    """Tests for YaazhiV4 full 5-step pipeline and graceful shutdown task draining."""
+
+    @pytest.mark.asyncio
+    async def test_v4_run_and_graceful_close(self):
+        from core.v4_orchestrator import YaazhiV4
+        from core.state import YaazhiOutput
+
+        mock_vs = AsyncMock()
+        mock_ret = AsyncMock()
+        mock_ret.retrieve = AsyncMock(return_value=[])
+        mock_ret.attach = MagicMock()
+
+        v4 = YaazhiV4(vector_store=mock_vs, retriever=mock_ret)
+        v4.graph = AsyncMock()
+        v4.graph.ainvoke = AsyncMock(
+            return_value={
+                "agent_outputs": {"t1": {"agent_name": "researcher", "success": True, "content": "V4 ok"}},
+                "final_output": YaazhiOutput(
+                    response="V4 Synthesized Output",
+                    session_id="v4-sess-1",
+                    confidence_score=0.9,
+                    agents_called=["researcher"],
+                    model_used="groq/llama-3.3-70b-versatile",
+                    detected_language="en",
+                    memories_used=1,
+                ).model_dump(),
+            }
+        )
+
+        with patch("core.v4_orchestrator.reflection_pipeline") as mock_rp:
+            mock_rp.run = AsyncMock(return_value=None)
+            out = await v4.run("implement BMS model in Python", session_id="v4-sess-1")
+            await v4.close()
+
+        assert out.response == "V4 Synthesized Output"
+        assert len(v4._bg_tasks) == 0

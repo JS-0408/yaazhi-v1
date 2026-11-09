@@ -125,6 +125,19 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse | StreamingR
     except Exception as exc:
         logfire.warning("Episodic: failed to store assistant response", error=str(exc))
 
+    # ── Persist interaction to vector memory (Phase 2 end-to-end loop) ────────
+    vector_store = getattr(state, "vector_store", None) or getattr(retriever, "_vs", None)
+    if vector_store is not None:
+        try:
+            interaction_text = f"User: {body.message}\nAssistant: {output.response}"
+            await vector_store.add(
+                interaction_text,
+                metadata={"session_id": body.session_id, "role": "interaction"},
+                source="chat",
+            )
+        except Exception as exc:
+            logfire.warning("VectorStore: failed to store chat interaction", error=str(exc))
+
     processing_time_ms = int((time.time() - t_start) * 1000)
     logfire.info(
         "POST /chat success",
@@ -170,9 +183,11 @@ async def list_sessions(request: Request) -> list[dict]:
     results: list[dict] = []
     cursor = 0
     while True:
-        cursor, keys = await r.scan(cursor, match="session:*:messages", count=100)
+        cursor, keys = await r.scan(cursor, match="*session:*:messages", count=100)
         for key in keys:
-            session_id = key.split(":")[1]
+            key_str = key.decode() if isinstance(key, bytes) else str(key)
+            parts = key_str.split(":")
+            session_id = parts[3] if (len(parts) >= 5 and parts[0] == "user") else parts[1]
             count = await r.llen(key)
             results.append({"session_id": session_id, "message_count": count})
         if cursor == 0:

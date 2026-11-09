@@ -343,3 +343,127 @@ async def test_add_through_attach_populates_redis_sorted_set(monkeypatch):
         f"but got members: {member_strs!r}. "
         f"This means _post_add_index() did not fire — attach() likely not wired."
     )
+
+
+# ---------------------------------------------------------------------------
+# Memory Resilience & Multi-VPS Outage Survival Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_embed_does_not_cache_fallback_vector_on_ollama_failure():
+    """
+    When Ollama is unreachable or cold-starting, _embed() must mark
+    _last_embed_degraded=True and MUST NOT cache the fake hash vector in Redis.
+    """
+    import fakeredis.aioredis as fakeredis_aioredis
+
+    fake_redis = fakeredis_aioredis.FakeRedis()
+    vs = VectorStore()
+    vs._redis = fake_redis
+    vs._pg_gate.record_failure()
+    vs._http = AsyncMock()
+    vs._http.post = AsyncMock(side_effect=RuntimeError("Ollama connection refused"))
+
+    vec = await vs._embed("critical architectural note")
+    assert len(vec) == 768
+    assert vs._last_embed_degraded is True
+
+    all_keys = await fake_redis.keys("embed:*")
+    assert all_keys == [], f"Degraded fallback vector must never be cached in Redis, found: {all_keys}"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_queues_and_drains_pending_memories():
+    """
+    Memories added while Ollama is down are queued in PendingMemoryQueue
+    (yaazhi:memory:pending) and re-embedded/persisted once drain_pending() runs.
+    """
+    import fakeredis.aioredis as fakeredis_aioredis
+
+    fake_redis = fakeredis_aioredis.FakeRedis()
+    vs = VectorStore()
+    vs._use_mem0 = False
+    vs._use_chroma = False
+    vs._pg_pool = None
+    vs._pg_gate.record_failure()
+    vs._redis = fake_redis
+    vs._http = AsyncMock()
+    vs._http.post = AsyncMock(side_effect=RuntimeError("Ollama cold start"))
+
+    mem_id = await vs.add("Drained memory test", user_id="santhosh", source="chat")
+    assert mem_id
+    assert await vs._pending_queue.size() == 1
+    assert vs._fallback_memory[-1]["metadata"].get("embedding_degraded") is True
+
+    # Now Ollama recovers
+    vs._http.post = AsyncMock(
+        return_value=MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={"embedding": [0.25] * 768}),
+        )
+    )
+    drained = await vs.drain_pending(max_items=10)
+    assert drained == 1
+    assert await vs._pending_queue.size() == 0
+
+
+@pytest.mark.asyncio
+async def test_episodic_memory_survives_redis_outage():
+    """
+    EpisodicMemory.add_message, get_history, clear_session, and preferences
+    must not crash when Redis raises ConnectionError; they fall back cleanly.
+    """
+    from memory.episodic import EpisodicMemory
+
+    em = EpisodicMemory()
+    em._pg_gate.record_failure()
+    broken_redis = MagicMock()
+    broken_pipe = MagicMock()
+    broken_pipe.execute = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    broken_redis.pipeline = MagicMock(return_value=broken_pipe)
+    broken_redis.lrange = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    broken_redis.delete = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    broken_redis.set = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    broken_redis.get = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    em._redis = broken_redis
+
+    await em.add_message("sess-resilience", "user", "Does this survive Redis crash?", user_id="alice")
+    await em.add_message("sess-resilience", "assistant", "Yes, via fallback.", user_id="alice")
+
+    history = await em.get_history("sess-resilience", user_id="alice")
+    assert len(history) == 2
+    assert history[0]["content"] == "Does this survive Redis crash?"
+    assert history[1]["content"] == "Yes, via fallback."
+
+    # Isolated from bob
+    assert await em.get_history("sess-resilience", user_id="bob") == []
+
+    # Preferences fallback
+    await em.set_preference("theme", "dark", user_id="alice")
+    assert await em.get_preference("theme", default="light", user_id="alice") == "dark"
+
+    await em.clear_session("sess-resilience", user_id="alice")
+    assert await em.get_history("sess-resilience", user_id="alice") == []
+
+
+def test_retry_gate_cooldown_and_reset():
+    from memory.resilience import RetryGate
+
+    gate = RetryGate(cooldown_s=60.0)
+    assert gate.ready() is True
+    gate.record_failure()
+    assert gate.ready() is False
+    gate.reset()
+    assert gate.ready() is True
+
+
+def test_api_key_middleware_fails_closed_in_production(test_client, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "yaazhi_api_key", "")
+    monkeypatch.setattr(settings, "env", "production")
+
+    resp = test_client.get("/api/v1/skills")
+    assert resp.status_code == 500
+    assert "YAAZHI_API_KEY not set in production" in resp.json()["detail"]
+

@@ -223,7 +223,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     Always-public paths (no key required): /health, /metrics
     """
 
-    _PUBLIC_PATHS: frozenset[str] = frozenset(["/health", "/metrics", "/metrics/"])
+    _PUBLIC_PATHS: frozenset[str] = frozenset(["/", "/console", "/health", "/metrics", "/metrics/"])
     _DOC_PATHS: frozenset[str] = frozenset(["/docs", "/redoc", "/openapi.json"])
     _LOCALHOST_HOSTS: frozenset[str] = frozenset(["127.0.0.1", "::1", "localhost"])
 
@@ -269,8 +269,14 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                 status_code=401,
             )
 
-        # Dev mode: no key configured — allow everything
+        # Dev mode: no key configured — allow everything; in production, fail closed
         if not settings.yaazhi_api_key:
+            if settings.env.lower() == "production":
+                logfire.error("YAAZHI_API_KEY not configured in production; rejecting request", path=path)
+                return JSONResponse(
+                    {"detail": "Server misconfigured: YAAZHI_API_KEY not set in production"},
+                    status_code=500,
+                )
             return await call_next(request)
 
         # Normal API paths — require valid X-API-Key

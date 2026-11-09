@@ -82,6 +82,8 @@ class Yaazhi:
         self.browser = BrowserAgent()
         self.notifier = NotifierAgent()
         self.retriever = SemanticRetriever()
+        from core.skill_manager import SkillManager
+        self.skill_manager = SkillManager(coder=self.coder)
         self._max_loops: int = settings.max_loop_count
         self.graph = self._build_graph()
         logfire.info("Yaazhi orchestrator ready", max_loops=self._max_loops)
@@ -147,7 +149,7 @@ class Yaazhi:
         logfire.debug("Planner node executing")
         try:
             plan = await self.planner.plan(
-                user_input=state["user_input"],
+                task=state["user_input"],
                 context=state.get("memory_context", ""),
             )
             state["current_tasks"] = [t.model_dump() for t in plan.tasks]
@@ -191,11 +193,13 @@ class Yaazhi:
                 model_used = settings.get_litellm_model("research")
 
             elif task.task_type == TaskType.CODE:
-                result = await self.coder.code_loop(
-                    task_description=task.description,
+                result = await self.coder.write_and_run(
+                    task=task.description,
                     context=state.get("memory_context", ""),
+                    session_id=state.get("session_id", ""),
                 )
-                content = f"```python\n{result.code}\n```\n\nOutput:\n{result.output}"
+                code_out = getattr(result, "stdout", None) or getattr(result, "output", "") or getattr(result, "stderr", "")
+                content = f"```python\n{result.code}\n```\n\nOutput:\n{code_out}"
                 model_used = settings.get_litellm_model("code")
 
             elif task.task_type == TaskType.READ_DOC:
@@ -229,8 +233,30 @@ class Yaazhi:
 
             elif task.task_type == TaskType.MEMORY:
                 result = await self.retriever.retrieve(query=task.description, top_k=5)
-                content = "\n".join([r.text for r in result]) or "No memories found"
-                model_used = "chromadb"
+                recalled = "\n".join([r.text for r in result]) or "No specific prior memories found."
+                import litellm
+                mem_model = settings.get_litellm_model("memory")
+                mem_prompt = (
+                    "You are Yaazhi, Santhosh's personal multi-agent AI system "
+                    "(equipped with Researcher, Coder, Reader, Browser, Notifier, Architect, "
+                    "SkillManager, and 3-layer Memory: Supabase pgvector semantic memory, "
+                    "Upstash Redis episodic session memory, and V4 Akam/Puram cognitive routing).\n\n"
+                    f"Recalled Memory Context:\n{recalled}\n{state.get('memory_context', '')}\n\n"
+                    f"User Request / Task: {state.get('user_input', task.description)}\n\n"
+                    "Answer the user's request directly, accurately, and conversationally."
+                )
+                try:
+                    resp = await litellm.acompletion(
+                        model=mem_model,
+                        messages=[{"role": "user", "content": mem_prompt}],
+                        max_tokens=1024,
+                        timeout=30,
+                    )
+                    content = (resp.choices[0].message.content or "").strip() or recalled
+                    model_used = mem_model
+                except Exception:
+                    content = recalled
+                    model_used = "pgvector"
 
             elif task.task_type == TaskType.PRIVATE:
                 # Route to local Ollama — never leaves VPS
@@ -509,13 +535,19 @@ class Yaazhi:
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
-    async def run(self, user_input: str, session_id: Optional[str] = None) -> YaazhiOutput:
+    async def run(
+        self,
+        user_input: str,
+        session_id: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> YaazhiOutput:
         """
         Process a user request end-to-end through the LangGraph pipeline.
 
         Args:
             user_input: The raw user message.
             session_id: Optional conversation session ID. Generated if not provided.
+            context: Optional pre-retrieved memory context to inject into planning.
 
         Returns:
             YaazhiOutput with the final synthesized response.
@@ -536,14 +568,25 @@ class Yaazhi:
             input_length=validated.char_count,
         )
 
-        # Retrieve memory context
+        # Retrieve memory context if not already provided by caller
+        if context is not None:
+            memory_context = context
+        else:
+            try:
+                memory_context = await self.retriever.build_context(
+                    query=validated.sanitized_text, max_tokens=1500
+                )
+            except Exception as exc:
+                logfire.warning("Memory retrieval failed, continuing without context", error=str(exc))
+                memory_context = ""
+
+        # Enrich context with any matching installed open-source skills
         try:
-            memory_context = await self.retriever.build_context(
-                query=validated.sanitized_text, max_tokens=1500
-            )
+            skills_context = self.skill_manager.build_skills_context(validated.sanitized_text)
+            if skills_context:
+                memory_context = f"{memory_context}\n\n{skills_context}".strip()
         except Exception as exc:
-            logfire.warning("Memory retrieval failed, continuing without context", error=str(exc))
-            memory_context = ""
+            logfire.warning("Skill context lookup failed", error=str(exc))
 
         # Build initial state
         initial_state = make_initial_state(
