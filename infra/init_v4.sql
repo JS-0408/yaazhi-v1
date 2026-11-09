@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS akam_user_state (
     objectives          JSONB       DEFAULT '[]'   -- Layer 12 long-horizon objectives
 );
 
+-- Additive migration for pre-existing akam_user_state tables
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS state_id UUID DEFAULT gen_random_uuid();
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS burnout_score FLOAT DEFAULT 0.0;
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS preferred_tone VARCHAR(100) DEFAULT 'Dry, Concise, Code-First';
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS active_constraints JSONB DEFAULT '{}';
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS identity_summary TEXT DEFAULT '';
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS meta_epochs JSONB DEFAULT '[]';
+ALTER TABLE akam_user_state ADD COLUMN IF NOT EXISTS objectives JSONB DEFAULT '[]';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_akam_user_state_user_id ON akam_user_state (user_id);
+
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 
 -- Episodic events: fast Tiṇai + time queries for reflection pipeline batches

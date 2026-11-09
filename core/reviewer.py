@@ -96,20 +96,20 @@ class Reviewer:
             syntax_ok, syntax_err = self._check_syntax(content)
             if not syntax_ok:
                 reason = f"Syntax error in generated code: {syntax_err}"
-                logfire.warning("Reviewer: syntax error detected", reason=reason)
+                logfire.warn("Reviewer: syntax error detected", reason=reason)
                 return self._make_result(REVISE, 0.3, reason, {})
 
         # ── Safety check ─────────────────────────────────────────────────
         safety_ok, safety_reason = self._safety_check(content)
         if not safety_ok:
-            logfire.warning("Reviewer: safety violation", reason=safety_reason)
+            logfire.warn("Reviewer: safety violation", reason=safety_reason)
             return self._make_result(FAIL, 0.0, safety_reason, {})
 
         # ── LLM scoring ──────────────────────────────────────────────────
         try:
             dimensions, score, reason = await self._llm_score(task_desc, content, agent_name)
         except Exception as exc:
-            logfire.warning("Reviewer: LLM scoring failed, defaulting REVISE", error=str(exc))
+            logfire.warn("Reviewer: LLM scoring failed, defaulting REVISE", error=str(exc))
             # B-04 FIX: was PASS (score 0.8) — fail-open when scorer is down bypassed
             # quality gating for potentially harmful outputs. REVISE triggers a retry.
             return self._make_result(
@@ -180,10 +180,10 @@ Return ONLY valid JSON with this exact structure:
             litellm.completion,
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=256,
+            max_tokens=1024,
             temperature=0.0,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = (response.choices[0].message.content or "").strip()
 
         # VECTOR-3 FIX: regex-anchored JSON extraction.
         # Replaces fragile split("```")[1] which raised IndexError on fence-free responses.
